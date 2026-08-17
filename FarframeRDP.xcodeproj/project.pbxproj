@@ -1,0 +1,970 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 71;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		100000000000000000000001 /* FarframeCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 210000000000000000000002 /* FarframeCore.framework */; };
+		100000000000000000000002 /* FarframeCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 210000000000000000000002 /* FarframeCore.framework */; };
+		100000000000000000000003 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 220000000000000000000001 /* XCTest.framework */; };
+		100000000000000000000004 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 220000000000000000000001 /* XCTest.framework */; };
+		100000000000000000000005 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 220000000000000000000001 /* XCTest.framework */; };
+		100000000000000000000006 /* libFarframeRDPBridge.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 210000000000000000000003 /* libFarframeRDPBridge.a */; };
+		100000000000000000000007 /* FarframeCore.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 210000000000000000000002 /* FarframeCore.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		100000000000000000000008 /* libFarframeRDPBridge.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 210000000000000000000003 /* libFarframeRDPBridge.a */; };
+		100000000000000000000009 /* third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 230000000000000000000001 /* third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a */; };
+		100000000000000000000010 /* third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 230000000000000000000001 /* third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A00000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 600000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 500000000000000000000002;
+			remoteInfo = FarframeCore;
+		};
+		A00000000000000000000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 600000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 500000000000000000000002;
+			remoteInfo = FarframeCore;
+		};
+		A00000000000000000000003 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 600000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 500000000000000000000001;
+			remoteInfo = FarframeRDP;
+		};
+		A00000000000000000000004 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 600000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 500000000000000000000003;
+			remoteInfo = FarframeRDPBridge;
+		};
+		A00000000000000000000005 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 600000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 500000000000000000000003;
+			remoteInfo = FarframeRDPBridge;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		440000000000000000000001 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				100000000000000000000007 /* FarframeCore.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		200000000000000000000041 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
+		200000000000000000000042 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
+		200000000000000000000043 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
+		200000000000000000000044 /* Sanitizer.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Sanitizer.xcconfig; sourceTree = "<group>"; };
+		210000000000000000000001 /* FarframeRDP.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FarframeRDP.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		210000000000000000000002 /* FarframeCore.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = FarframeCore.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		210000000000000000000003 /* libFarframeRDPBridge.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libFarframeRDPBridge.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		210000000000000000000004 /* FarframeCoreTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FarframeCoreTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		210000000000000000000005 /* FarframeRDPTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FarframeRDPTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		210000000000000000000006 /* FarframeRDPBridgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FarframeRDPBridgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		220000000000000000000001 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
+		230000000000000000000001 /* third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = "third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a"; sourceTree = SOURCE_ROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		310000000000000000000001 /* Sources/FarframeRDP */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Sources/FarframeRDP; sourceTree = "<group>"; };
+		310000000000000000000002 /* Sources/FarframeCore */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Sources/FarframeCore; sourceTree = "<group>"; };
+		310000000000000000000003 /* Sources/FarframeRDPBridge */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Sources/FarframeRDPBridge; sourceTree = "<group>"; };
+		310000000000000000000004 /* Tests/FarframeCoreTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Tests/FarframeCoreTests; sourceTree = "<group>"; };
+		310000000000000000000005 /* Tests/FarframeRDPTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Tests/FarframeRDPTests; sourceTree = "<group>"; };
+		310000000000000000000006 /* Tests/FarframeRDPBridgeTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Tests/FarframeRDPBridgeTests; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		410000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100000000000000000000001 /* FarframeCore.framework in Frameworks */,
+				100000000000000000000008 /* libFarframeRDPBridge.a in Frameworks */,
+				100000000000000000000009 /* third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		410000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		410000000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		410000000000000000000004 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100000000000000000000002 /* FarframeCore.framework in Frameworks */,
+				100000000000000000000003 /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		410000000000000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100000000000000000000004 /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		410000000000000000000006 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100000000000000000000005 /* XCTest.framework in Frameworks */,
+				100000000000000000000006 /* libFarframeRDPBridge.a in Frameworks */,
+				100000000000000000000010 /* third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		300000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				310000000000000000000001 /* Sources/FarframeRDP */,
+				310000000000000000000002 /* Sources/FarframeCore */,
+				310000000000000000000003 /* Sources/FarframeRDPBridge */,
+				310000000000000000000004 /* Tests/FarframeCoreTests */,
+				310000000000000000000005 /* Tests/FarframeRDPTests */,
+				310000000000000000000006 /* Tests/FarframeRDPBridgeTests */,
+				300000000000000000000010 /* Configurations */,
+				300000000000000000000011 /* Frameworks */,
+				300000000000000000000012 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		300000000000000000000010 /* Configurations */ = {
+			isa = PBXGroup;
+			children = (
+				200000000000000000000041 /* Base.xcconfig */,
+				200000000000000000000042 /* Debug.xcconfig */,
+				200000000000000000000043 /* Release.xcconfig */,
+				200000000000000000000044 /* Sanitizer.xcconfig */,
+			);
+			path = Configurations;
+			sourceTree = "<group>";
+		};
+		300000000000000000000011 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				220000000000000000000001 /* XCTest.framework */,
+				230000000000000000000001 /* third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		300000000000000000000012 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				210000000000000000000001 /* FarframeRDP.app */,
+				210000000000000000000002 /* FarframeCore.framework */,
+				210000000000000000000003 /* libFarframeRDPBridge.a */,
+				210000000000000000000004 /* FarframeCoreTests.xctest */,
+				210000000000000000000005 /* FarframeRDPTests.xctest */,
+				210000000000000000000006 /* FarframeRDPBridgeTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		500000000000000000000001 /* FarframeRDP */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 710000000000000000000001 /* Build configuration list for PBXNativeTarget "FarframeRDP" */;
+			buildPhases = (
+				400000000000000000000001 /* Sources */,
+				410000000000000000000001 /* Frameworks */,
+				440000000000000000000001 /* Embed Frameworks */,
+				430000000000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				900000000000000000000001 /* PBXTargetDependency */,
+				900000000000000000000005 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				310000000000000000000001 /* Sources/FarframeRDP */,
+			);
+			name = FarframeRDP;
+			productName = FarframeRDP;
+			productReference = 210000000000000000000001 /* FarframeRDP.app */;
+			productType = "com.apple.product-type.application";
+		};
+		500000000000000000000002 /* FarframeCore */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 710000000000000000000002 /* Build configuration list for PBXNativeTarget "FarframeCore" */;
+			buildPhases = (
+				400000000000000000000002 /* Sources */,
+				410000000000000000000002 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				310000000000000000000002 /* Sources/FarframeCore */,
+			);
+			name = FarframeCore;
+			productName = FarframeCore;
+			productReference = 210000000000000000000002 /* FarframeCore.framework */;
+			productType = "com.apple.product-type.framework";
+		};
+		500000000000000000000003 /* FarframeRDPBridge */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 710000000000000000000003 /* Build configuration list for PBXNativeTarget "FarframeRDPBridge" */;
+			buildPhases = (
+				400000000000000000000003 /* Sources */,
+				410000000000000000000003 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				310000000000000000000003 /* Sources/FarframeRDPBridge */,
+			);
+			name = FarframeRDPBridge;
+			productName = FarframeRDPBridge;
+			productReference = 210000000000000000000003 /* libFarframeRDPBridge.a */;
+			productType = "com.apple.product-type.library.static";
+		};
+		500000000000000000000004 /* FarframeCoreTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 710000000000000000000004 /* Build configuration list for PBXNativeTarget "FarframeCoreTests" */;
+			buildPhases = (
+				400000000000000000000004 /* Sources */,
+				410000000000000000000004 /* Frameworks */,
+				430000000000000000000004 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				900000000000000000000002 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				310000000000000000000004 /* Tests/FarframeCoreTests */,
+			);
+			name = FarframeCoreTests;
+			productName = FarframeCoreTests;
+			productReference = 210000000000000000000004 /* FarframeCoreTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		500000000000000000000005 /* FarframeRDPTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 710000000000000000000005 /* Build configuration list for PBXNativeTarget "FarframeRDPTests" */;
+			buildPhases = (
+				400000000000000000000005 /* Sources */,
+				410000000000000000000005 /* Frameworks */,
+				430000000000000000000005 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				900000000000000000000003 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				310000000000000000000005 /* Tests/FarframeRDPTests */,
+			);
+			name = FarframeRDPTests;
+			productName = FarframeRDPTests;
+			productReference = 210000000000000000000005 /* FarframeRDPTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		500000000000000000000006 /* FarframeRDPBridgeTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 710000000000000000000006 /* Build configuration list for PBXNativeTarget "FarframeRDPBridgeTests" */;
+			buildPhases = (
+				400000000000000000000006 /* Sources */,
+				410000000000000000000006 /* Frameworks */,
+				430000000000000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				900000000000000000000004 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				310000000000000000000006 /* Tests/FarframeRDPBridgeTests */,
+			);
+			name = FarframeRDPBridgeTests;
+			productName = FarframeRDPBridgeTests;
+			productReference = 210000000000000000000006 /* FarframeRDPBridgeTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		600000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2620;
+				LastUpgradeCheck = 2620;
+				TargetAttributes = {
+					500000000000000000000001 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					500000000000000000000002 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					500000000000000000000003 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					500000000000000000000004 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = 500000000000000000000002;
+					};
+					500000000000000000000005 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = 500000000000000000000001;
+					};
+					500000000000000000000006 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = 500000000000000000000003;
+					};
+				};
+			};
+			buildConfigurationList = 700000000000000000000001 /* Build configuration list for PBXProject "FarframeRDP" */;
+			compatibilityVersion = "Xcode 16.0";
+			developmentRegion = "zh-Hans";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				"zh-Hans",
+				Base,
+			);
+			mainGroup = 300000000000000000000001;
+			productRefGroup = 300000000000000000000012 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				500000000000000000000001 /* FarframeRDP */,
+				500000000000000000000002 /* FarframeCore */,
+				500000000000000000000003 /* FarframeRDPBridge */,
+				500000000000000000000004 /* FarframeCoreTests */,
+				500000000000000000000005 /* FarframeRDPTests */,
+				500000000000000000000006 /* FarframeRDPBridgeTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		430000000000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		430000000000000000000004 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		430000000000000000000005 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		430000000000000000000006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		400000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		400000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		400000000000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		400000000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		400000000000000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		400000000000000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		900000000000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 500000000000000000000002 /* FarframeCore */;
+			targetProxy = A00000000000000000000001 /* PBXContainerItemProxy */;
+		};
+		900000000000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 500000000000000000000002 /* FarframeCore */;
+			targetProxy = A00000000000000000000002 /* PBXContainerItemProxy */;
+		};
+		900000000000000000000003 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 500000000000000000000001 /* FarframeRDP */;
+			targetProxy = A00000000000000000000003 /* PBXContainerItemProxy */;
+		};
+		900000000000000000000004 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 500000000000000000000003 /* FarframeRDPBridge */;
+			targetProxy = A00000000000000000000004 /* PBXContainerItemProxy */;
+		};
+		900000000000000000000005 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 500000000000000000000003 /* FarframeRDPBridge */;
+			targetProxy = A00000000000000000000005 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		800000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 200000000000000000000042 /* Debug.xcconfig */;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+		800000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 200000000000000000000043 /* Release.xcconfig */;
+			buildSettings = {
+			};
+			name = Release;
+		};
+		800000000000000000000003 /* Sanitizer */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 200000000000000000000044 /* Sanitizer.xcconfig */;
+			buildSettings = {
+			};
+			name = Sanitizer;
+		};
+		810000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Farframe RDP";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "启用麦克风重定向时，Farframe RDP 需要访问麦克风并将音频输入发送到当前远程会话。";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-arm64/lib";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					Foundation,
+					"-framework",
+					Security,
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					Carbon,
+					"-framework",
+					Cocoa,
+					"-framework",
+					CoreFoundation,
+					"-framework",
+					CoreServices,
+					"-framework",
+					CoreAudio,
+					"-framework",
+					AudioToolbox,
+					"-framework",
+					AVFoundation,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp;
+				PRODUCT_NAME = FarframeRDP;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Sources/FarframeRDPBridge/include";
+			};
+			name = Debug;
+		};
+		810000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Farframe RDP";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "启用麦克风重定向时，Farframe RDP 需要访问麦克风并将音频输入发送到当前远程会话。";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-arm64/lib";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					Foundation,
+					"-framework",
+					Security,
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					Carbon,
+					"-framework",
+					Cocoa,
+					"-framework",
+					CoreFoundation,
+					"-framework",
+					CoreServices,
+					"-framework",
+					CoreAudio,
+					"-framework",
+					AudioToolbox,
+					"-framework",
+					AVFoundation,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp;
+				PRODUCT_NAME = FarframeRDP;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Sources/FarframeRDPBridge/include";
+			};
+			name = Release;
+		};
+		810000000000000000000003 /* Sanitizer */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Farframe RDP";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "启用麦克风重定向时，Farframe RDP 需要访问麦克风并将音频输入发送到当前远程会话。";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-arm64/lib";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					Foundation,
+					"-framework",
+					Security,
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					Carbon,
+					"-framework",
+					Cocoa,
+					"-framework",
+					CoreFoundation,
+					"-framework",
+					CoreServices,
+					"-framework",
+					CoreAudio,
+					"-framework",
+					AudioToolbox,
+					"-framework",
+					AVFoundation,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp;
+				PRODUCT_NAME = FarframeRDP;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Sources/FarframeRDPBridge/include";
+			};
+			name = Sanitizer;
+		};
+		820000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEFINES_MODULE = YES;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.core;
+				PRODUCT_NAME = FarframeCore;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		820000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEFINES_MODULE = YES;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.core;
+				PRODUCT_NAME = FarframeCore;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
+		820000000000000000000003 /* Sanitizer */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEFINES_MODULE = YES;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.core;
+				PRODUCT_NAME = FarframeCore;
+				SKIP_INSTALL = YES;
+			};
+			name = Sanitizer;
+		};
+		830000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEFINES_MODULE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/Sources/FarframeRDPBridge/include",
+					"$(SRCROOT)/third-party/artifacts/macos-arm64/freerdp/include/freerdp3",
+					"$(SRCROOT)/third-party/artifacts/macos-arm64/freerdp/include/winpr3",
+				);
+				PRODUCT_NAME = FarframeRDPBridge;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		830000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEFINES_MODULE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/Sources/FarframeRDPBridge/include",
+					"$(SRCROOT)/third-party/artifacts/macos-arm64/freerdp/include/freerdp3",
+					"$(SRCROOT)/third-party/artifacts/macos-arm64/freerdp/include/winpr3",
+				);
+				PRODUCT_NAME = FarframeRDPBridge;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
+		830000000000000000000003 /* Sanitizer */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEFINES_MODULE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/Sources/FarframeRDPBridge/include",
+					"$(SRCROOT)/third-party/artifacts/macos-arm64/freerdp/include/freerdp3",
+					"$(SRCROOT)/third-party/artifacts/macos-arm64/freerdp/include/winpr3",
+				);
+				PRODUCT_NAME = FarframeRDPBridge;
+				SKIP_INSTALL = YES;
+			};
+			name = Sanitizer;
+		};
+		840000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.core.tests;
+				PRODUCT_NAME = FarframeCoreTests;
+			};
+			name = Debug;
+		};
+		840000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.core.tests;
+				PRODUCT_NAME = FarframeCoreTests;
+			};
+			name = Release;
+		};
+		840000000000000000000003 /* Sanitizer */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.core.tests;
+				PRODUCT_NAME = FarframeCoreTests;
+			};
+			name = Sanitizer;
+		};
+		850000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.tests;
+				PRODUCT_NAME = FarframeRDPTests;
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Sources/FarframeRDPBridge/include";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FarframeRDP.app/Contents/MacOS/FarframeRDP";
+			};
+			name = Debug;
+		};
+		850000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.tests;
+				PRODUCT_NAME = FarframeRDPTests;
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Sources/FarframeRDPBridge/include";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FarframeRDP.app/Contents/MacOS/FarframeRDP";
+			};
+			name = Release;
+		};
+		850000000000000000000003 /* Sanitizer */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.tests;
+				PRODUCT_NAME = FarframeRDPTests;
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Sources/FarframeRDPBridge/include";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FarframeRDP.app/Contents/MacOS/FarframeRDP";
+			};
+			name = Sanitizer;
+		};
+		860000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/Sources/FarframeRDPBridge/include";
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-arm64/lib";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					Foundation,
+					"-framework",
+					Security,
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					Carbon,
+					"-framework",
+					Cocoa,
+					"-framework",
+					CoreFoundation,
+					"-framework",
+					CoreServices,
+					"-framework",
+					CoreAudio,
+					"-framework",
+					AudioToolbox,
+					"-framework",
+					AVFoundation,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.bridge.tests;
+				PRODUCT_NAME = FarframeRDPBridgeTests;
+			};
+			name = Debug;
+		};
+		860000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/Sources/FarframeRDPBridge/include";
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-arm64/lib";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					Foundation,
+					"-framework",
+					Security,
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					Carbon,
+					"-framework",
+					Cocoa,
+					"-framework",
+					CoreFoundation,
+					"-framework",
+					CoreServices,
+					"-framework",
+					CoreAudio,
+					"-framework",
+					AudioToolbox,
+					"-framework",
+					AVFoundation,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.bridge.tests;
+				PRODUCT_NAME = FarframeRDPBridgeTests;
+			};
+			name = Release;
+		};
+		860000000000000000000003 /* Sanitizer */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/Sources/FarframeRDPBridge/include";
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-arm64/lib";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					Foundation,
+					"-framework",
+					Security,
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					Carbon,
+					"-framework",
+					Cocoa,
+					"-framework",
+					CoreFoundation,
+					"-framework",
+					CoreServices,
+					"-framework",
+					CoreAudio,
+					"-framework",
+					AudioToolbox,
+					"-framework",
+					AVFoundation,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.bridge.tests;
+				PRODUCT_NAME = FarframeRDPBridgeTests;
+			};
+			name = Sanitizer;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		700000000000000000000001 /* Build configuration list for PBXProject "FarframeRDP" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				800000000000000000000001 /* Debug */,
+				800000000000000000000002 /* Release */,
+				800000000000000000000003 /* Sanitizer */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		710000000000000000000001 /* Build configuration list for PBXNativeTarget "FarframeRDP" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				810000000000000000000001 /* Debug */,
+				810000000000000000000002 /* Release */,
+				810000000000000000000003 /* Sanitizer */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		710000000000000000000002 /* Build configuration list for PBXNativeTarget "FarframeCore" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				820000000000000000000001 /* Debug */,
+				820000000000000000000002 /* Release */,
+				820000000000000000000003 /* Sanitizer */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		710000000000000000000003 /* Build configuration list for PBXNativeTarget "FarframeRDPBridge" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				830000000000000000000001 /* Debug */,
+				830000000000000000000002 /* Release */,
+				830000000000000000000003 /* Sanitizer */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		710000000000000000000004 /* Build configuration list for PBXNativeTarget "FarframeCoreTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				840000000000000000000001 /* Debug */,
+				840000000000000000000002 /* Release */,
+				840000000000000000000003 /* Sanitizer */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		710000000000000000000005 /* Build configuration list for PBXNativeTarget "FarframeRDPTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				850000000000000000000001 /* Debug */,
+				850000000000000000000002 /* Release */,
+				850000000000000000000003 /* Sanitizer */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		710000000000000000000006 /* Build configuration list for PBXNativeTarget "FarframeRDPBridgeTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				860000000000000000000001 /* Debug */,
+				860000000000000000000002 /* Release */,
+				860000000000000000000003 /* Sanitizer */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 600000000000000000000001 /* Project object */;
+}

@@ -1,0 +1,4 @@
+module FarframeRDPBridge {
+    header "FarframeRDPBridge.h"
+    export *
+}

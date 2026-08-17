@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "profiles": [
+    {
+      "displayName": "Local test host",
+      "host": "replace-with-local-untracked-value",
+      "port": 3389,
+      "username": "replace-with-local-untracked-value",
+      "domain": "",
+      "credentialSource": "keychain-or-interactive"
+    }
+  ]
+}

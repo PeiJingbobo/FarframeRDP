@@ -1,0 +1,105 @@
+diff --git a/channels/drive/client/drive_file.c b/channels/drive/client/drive_file.c
+index 388cfea..5bd2a5b 100644
+--- a/channels/drive/client/drive_file.c
++++ b/channels/drive/client/drive_file.c
+@@ -28,9 +28,13 @@
+ #include <freerdp/config.h>
+ 
+ #include <errno.h>
++#include <limits.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#ifndef _WIN32
++#include <unistd.h>
++#endif
+ #include <time.h>
+ 
+ #include <winpr/wtypes.h>
+@@ -122,6 +126,48 @@ static BOOL contains_dotdot(const WCHAR* path, size_t base_length, size_t path_l
+ 	return FALSE;
+ }
+ 
++#ifndef _WIN32
++static BOOL drive_file_path_is_below_base(const WCHAR* base_path, const WCHAR* fullpath)
++{
++	BOOL rc = FALSE;
++	char* base = nullptr;
++	char* candidate = nullptr;
++	char resolvedBase[PATH_MAX] = WINPR_C_ARRAY_INIT;
++	char resolvedPrefix[PATH_MAX] = WINPR_C_ARRAY_INIT;
++
++	if (!base_path || !fullpath)
++		goto out;
++	base = ConvertWCharToUtf8Alloc(base_path, nullptr);
++	candidate = ConvertWCharToUtf8Alloc(fullpath, nullptr);
++	if (!base || !candidate || !realpath(base, resolvedBase))
++		goto out;
++
++	for (;;)
++	{
++		if (realpath(candidate, resolvedPrefix))
++			break;
++		char* slash = strrchr(candidate, '/');
++		if (!slash || slash == candidate)
++			goto out;
++		*slash = '\0';
++	}
++
++	const size_t baseLength = strlen(resolvedBase);
++	if ((strncmp(resolvedBase, resolvedPrefix, baseLength) == 0) &&
++	    ((resolvedPrefix[baseLength] == '\0') || (resolvedPrefix[baseLength] == '/')))
++		rc = TRUE;
++out:
++	free(base);
++	free(candidate);
++	return rc;
++}
++#else
++static BOOL drive_file_path_is_below_base(const WCHAR* base_path, const WCHAR* fullpath)
++{
++	return base_path && fullpath;
++}
++#endif
++
+ static WCHAR* drive_file_combine_fullpath(const WCHAR* base_path, const WCHAR* path,
+                                           size_t PathWCharLength)
+ {
+@@ -156,6 +202,12 @@ static WCHAR* drive_file_combine_fullpath(const WCHAR* base_path, const WCHAR* p
+ 		if (path)
+ 			CopyMemory(&fullpath[base_path_length], path, PathWCharLength * sizeof(WCHAR));
+ 
++		for (size_t x = 0; x < PathWCharLength; x++)
++		{
++			if (path[x] == L'\0')
++				goto fail;
++		}
++
+ 		if (!drive_file_fix_path(fullpath, length))
+ 			goto fail;
+ 
+@@ -168,6 +220,9 @@ static WCHAR* drive_file_combine_fullpath(const WCHAR* base_path, const WCHAR* p
+ 			free(abuffer);
+ 			goto fail;
+ 		}
++
++		if (!drive_file_path_is_below_base(base_path, fullpath))
++			goto fail;
+ 	}
+ 
+ 	ok = TRUE;
+@@ -359,7 +414,13 @@ DRIVE_FILE* drive_file_new(const WCHAR* base_path, const WCHAR* path, UINT32 Pat
+ 	file->SharedAccess = SharedAccess;
+ 
+ 	WCHAR* p = drive_file_combine_fullpath(base_path, path, PathWCharLength);
+-	(void)drive_file_set_fullpath(file, p);
++	if (!p || !drive_file_set_fullpath(file, p))
++	{
++		free(p);
++		drive_file_free(file);
++		SetLastError(ERROR_ACCESS_DENIED);
++		return nullptr;
++	}
+ 	free(p);
+ 
+ 	if (!drive_file_init(file))

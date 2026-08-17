@@ -1,0 +1,65 @@
+# macOS metadata
+.DS_Store
+
+# Local project management and AI assistant metadata
+# TangoForge databases/configuration must remain local, including nested copies.
+.taskboard/
+docs/
+AGENTS.md
+.claude/
+.codex/
+.cursor/
+.github/
+.agents/
+.aider/
+.continue/
+.gemini/
+.windsurf/
+
+# Xcode user state and generated output
+DerivedData/
+.derivedData/
+.derivedData-*/
+build/
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# CMake and native dependency output
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+third-party/build/
+third-party/artifacts/
+third-party/sources/
+
+# Sanitizer, coverage, profiling, and diagnostics
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+*.trace
+*.dSYM/
+diagnostics/
+
+# Local integration configuration and secrets
+config/local/
+config/*.local.*
+!config/*.example.*
+.env
+.env.*
+!.env.example
+
+# Editor and temporary files
+.idea/
+.vscode/
+*.swp
+*.tmp
+*~

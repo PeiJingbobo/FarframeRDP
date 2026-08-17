@@ -1,0 +1,44 @@
+SPDXVersion: SPDX-2.3
+DataLicense: CC0-1.0
+SPDXID: SPDXRef-DOCUMENT
+DocumentName: FarframeRDP-native-dependencies
+DocumentNamespace: https://farframe.example.invalid/spdx/native-dependencies/2026-08-17
+Creator: Organization: Farframe RDP
+Created: 2026-08-17T12:00:00Z
+
+PackageName: FreeRDP
+SPDXID: SPDXRef-Package-FreeRDP
+PackageVersion: 3.30.0
+PackageDownloadLocation: git+https://github.com/FreeRDP/FreeRDP.git@6b107f0aadbabc47941c5a5b893b88c01792af6d
+FilesAnalyzed: false
+PackageLicenseConcluded: Apache-2.0
+PackageLicenseDeclared: Apache-2.0
+PackageCopyrightText: NOASSERTION
+ExternalRef: PACKAGE-MANAGER purl pkg:github/FreeRDP/FreeRDP@6b107f0aadbabc47941c5a5b893b88c01792af6d
+
+PackageName: WinPR
+SPDXID: SPDXRef-Package-WinPR
+PackageVersion: 3.30.0
+PackageDownloadLocation: git+https://github.com/FreeRDP/FreeRDP.git@6b107f0aadbabc47941c5a5b893b88c01792af6d
+FilesAnalyzed: false
+PackageLicenseConcluded: Apache-2.0
+PackageLicenseDeclared: Apache-2.0
+PackageCopyrightText: NOASSERTION
+PackageComment: WinPR is built from the pinned FreeRDP source tree and commit.
+ExternalRef: PACKAGE-MANAGER purl pkg:github/FreeRDP/FreeRDP@6b107f0aadbabc47941c5a5b893b88c01792af6d
+
+PackageName: OpenSSL
+SPDXID: SPDXRef-Package-OpenSSL
+PackageVersion: 3.5.7
+PackageDownloadLocation: git+https://github.com/openssl/openssl.git@8cf17aaeb4599f8af87fefd810b5b5fee90fe69e
+FilesAnalyzed: false
+PackageLicenseConcluded: Apache-2.0
+PackageLicenseDeclared: Apache-2.0
+PackageCopyrightText: NOASSERTION
+ExternalRef: PACKAGE-MANAGER purl pkg:github/openssl/openssl@8cf17aaeb4599f8af87fefd810b5b5fee90fe69e
+
+Relationship: SPDXRef-DOCUMENT DESCRIBES SPDXRef-Package-FreeRDP
+Relationship: SPDXRef-DOCUMENT DESCRIBES SPDXRef-Package-WinPR
+Relationship: SPDXRef-DOCUMENT DESCRIBES SPDXRef-Package-OpenSSL
+Relationship: SPDXRef-Package-FreeRDP DEPENDS_ON SPDXRef-Package-WinPR
+Relationship: SPDXRef-Package-FreeRDP DEPENDS_ON SPDXRef-Package-OpenSSL

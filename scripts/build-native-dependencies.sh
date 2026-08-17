@@ -1,0 +1,270 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+project_root=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
+
+# shellcheck source=../third-party/versions.sh
+. "$project_root/third-party/versions.sh"
+
+if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
+    echo "error: native dependencies currently support macOS arm64 only" >&2
+    exit 1
+fi
+
+find_tool() {
+    variable_name=$1
+    command_name=$2
+    eval "configured_path=\${$variable_name:-}"
+    if [ -n "$configured_path" ]; then
+        if [ ! -x "$configured_path" ]; then
+            echo "error: $variable_name is not executable: $configured_path" >&2
+            exit 1
+        fi
+        printf '%s\n' "$configured_path"
+        return
+    fi
+
+    resolved_path=$(command -v "$command_name" || true)
+    if [ -z "$resolved_path" ]; then
+        echo "error: $command_name not found; set $variable_name to an executable path" >&2
+        exit 1
+    fi
+    printf '%s\n' "$resolved_path"
+}
+
+source_root="$project_root/third-party/sources"
+build_root="$project_root/third-party/build/macos-arm64"
+artifact_root="$project_root/third-party/artifacts/macos-arm64"
+openssl_source="$source_root/openssl"
+freerdp_source="$source_root/freerdp"
+freerdp_patch="$project_root/third-party/patches/freerdp-drive-canonical-containment.patch"
+openssl_prefix="$artifact_root/openssl"
+freerdp_prefix="$artifact_root/freerdp"
+combined_lib="$artifact_root/lib/libFarframeRDPDependencies.a"
+stamp_file="$artifact_root/build-manifest.txt"
+
+expected_manifest=$(cat <<EOF
+platform=macos-arm64
+build_recipe=11
+deployment_target=14.0
+system_processor=aarch64
+with_simd=OFF
+channel_audin=ON
+channel_cliprdr=ON
+channel_disp=ON
+channel_drive=ON
+channel_printer=OFF
+channel_rail=ON
+channel_rdpdr=ON
+channel_rdpsnd=ON
+channel_smartcard=OFF
+with_cups=OFF
+with_pcsc=OFF
+freerdp_version=$FARFRAME_FREERDP_VERSION
+freerdp_commit=$FARFRAME_FREERDP_COMMIT
+openssl_version=$FARFRAME_OPENSSL_VERSION
+openssl_commit=$FARFRAME_OPENSSL_COMMIT
+EOF
+)
+
+if [ -f "$stamp_file" ] && [ -f "$combined_lib" ] &&
+   [ "$(cat "$stamp_file")" = "$expected_manifest" ]; then
+    echo "Native dependencies are current: $artifact_root"
+    exit 0
+fi
+cmake_bin=$(find_tool FARFRAME_CMAKE cmake)
+cmake_generator=${FARFRAME_CMAKE_GENERATOR:-Ninja}
+case "$cmake_generator" in
+    Ninja)
+        build_tool_bin=$(find_tool FARFRAME_NINJA ninja)
+        ;;
+    "Unix Makefiles")
+        build_tool_bin=$(find_tool FARFRAME_MAKE make)
+        ;;
+    *)
+        echo "error: unsupported FARFRAME_CMAKE_GENERATOR: $cmake_generator" >&2
+        exit 1
+        ;;
+esac
+
+
+mkdir -p "$source_root" "$build_root" "$artifact_root/lib"
+
+checkout_exact_commit() {
+    repository=$1
+    commit=$2
+    destination=$3
+    label=$4
+
+    if [ ! -d "$destination/.git" ]; then
+        if [ -e "$destination" ]; then
+            echo "error: non-Git path blocks $label checkout: $destination" >&2
+            exit 1
+        fi
+        git init -q "$destination"
+        git -C "$destination" remote add origin "$repository"
+    fi
+
+    current_commit=$(git -C "$destination" rev-parse HEAD 2>/dev/null || true)
+    if [ "$current_commit" != "$commit" ]; then
+        git -C "$destination" fetch --depth 1 origin "$commit"
+        git -C "$destination" checkout -q --detach FETCH_HEAD
+    fi
+
+    actual_commit=$(git -C "$destination" rev-parse HEAD)
+    if [ "$actual_commit" != "$commit" ]; then
+        echo "error: $label checkout mismatch: $actual_commit" >&2
+        exit 1
+    fi
+}
+
+checkout_exact_commit \
+    "$FARFRAME_OPENSSL_REPOSITORY" \
+    "$FARFRAME_OPENSSL_COMMIT" \
+    "$openssl_source" \
+    OpenSSL
+
+checkout_exact_commit \
+    "$FARFRAME_FREERDP_REPOSITORY" \
+    "$FARFRAME_FREERDP_COMMIT" \
+    "$freerdp_source" \
+    FreeRDP
+
+# The upstream drive add-in rejects `..` components, but the pinned 3.30.0
+# implementation otherwise follows symlinks without checking that the resolved
+# target remains below the explicitly shared root. Keep this security patch in
+# the reproducible recipe and fail closed if the pinned source no longer matches.
+if git -C "$freerdp_source" apply --reverse --check "$freerdp_patch" 2>/dev/null; then
+    : # already applied in this local checkout
+elif git -C "$freerdp_source" apply --check "$freerdp_patch"; then
+    git -C "$freerdp_source" apply "$freerdp_patch"
+else
+    echo "error: FreeRDP drive containment patch does not apply cleanly" >&2
+    exit 1
+fi
+
+openssl_stamp="$openssl_prefix/.farframe-build-commit"
+openssl_expected_stamp="$FARFRAME_OPENSSL_COMMIT macos-arm64 deployment-target-14.0"
+if [ ! -f "$openssl_stamp" ] || [ "$(cat "$openssl_stamp")" != "$openssl_expected_stamp" ]; then
+    openssl_build="$build_root/openssl"
+    rm -rf "$openssl_build" "$openssl_prefix"
+    mkdir -p "$openssl_build" "$openssl_prefix"
+
+    (
+        cd "$openssl_build"
+        export MACOSX_DEPLOYMENT_TARGET=14.0
+        export CFLAGS="-mmacosx-version-min=14.0"
+        "$openssl_source/Configure" \
+            darwin64-arm64-cc \
+            no-shared \
+            no-tests \
+            no-docs \
+            --prefix="$openssl_prefix" \
+            --openssldir="$openssl_prefix/ssl"
+        make -j"$(sysctl -n hw.logicalcpu)"
+        make install_sw
+    )
+    printf '%s\n' "$openssl_expected_stamp" > "$openssl_stamp"
+fi
+
+freerdp_build="$build_root/freerdp"
+rm -rf "$freerdp_build" "$freerdp_prefix"
+
+MACOSX_DEPLOYMENT_TARGET=14.0 "$cmake_bin" \
+    -S "$freerdp_source" \
+    -B "$freerdp_build" \
+    -G "$cmake_generator" \
+    -DCMAKE_MAKE_PROGRAM="$build_tool_bin" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="$freerdp_prefix" \
+    -DCMAKE_OSX_ARCHITECTURES=arm64 \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+    -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+    -DCMAKE_PREFIX_PATH="$openssl_prefix" \
+    -DOPENSSL_ROOT_DIR="$openssl_prefix" \
+    -DOPENSSL_USE_STATIC_LIBS=TRUE \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DBUILD_TESTING=OFF \
+    -DBUILD_TESTING_INTERNAL=OFF \
+    -DBUILD_BENCHMARK=OFF \
+    -DWITH_CLIENT=OFF \
+    -DWITH_CLIENT_COMMON=ON \
+    -DWITH_CLIENT_SDL=OFF \
+    -DWITH_SERVER=OFF \
+    -DWITH_SERVER_INTERFACE=OFF \
+    -DWITH_PROXY=OFF \
+    -DWITH_SHADOW=OFF \
+    -DWITH_SAMPLE=OFF \
+    -DWITH_CHANNELS=ON \
+    -DWITH_CLIENT_CHANNELS=ON \
+    -DWITH_SERVER_CHANNELS=OFF \
+    -DCHANNEL_AINPUT=OFF \
+    -DCHANNEL_AUDIN=ON \
+    -DCHANNEL_CLIPRDR=ON \
+    -DCHANNEL_DISP=ON \
+    -DCHANNEL_DRDYNVC=ON \
+    -DCHANNEL_DRIVE=ON \
+    -DCHANNEL_ECHO=OFF \
+    -DCHANNEL_ENCOMSP=OFF \
+    -DCHANNEL_GEOMETRY=OFF \
+    -DCHANNEL_GFXREDIR=OFF \
+    -DCHANNEL_LOCATION=OFF \
+    -DCHANNEL_PARALLEL=OFF \
+    -DCHANNEL_PRINTER=OFF \
+    -DCHANNEL_RAIL=ON \
+    -DCHANNEL_RDP2TCP=OFF \
+    -DCHANNEL_RDPDR=ON \
+    -DCHANNEL_RDPEAR=OFF \
+    -DCHANNEL_RDPECAM=OFF \
+    -DCHANNEL_RDPEI=OFF \
+    -DCHANNEL_RDPEMSC=OFF \
+    -DCHANNEL_RDPEWA=OFF \
+    -DCHANNEL_RDPGFX=OFF \
+    -DCHANNEL_RDPSND=ON \
+    -DCHANNEL_REMDESK=OFF \
+    -DCHANNEL_SERIAL=OFF \
+    -DCHANNEL_SMARTCARD=OFF \
+    -DCHANNEL_SSHAGENT=OFF \
+    -DCHANNEL_TELEMETRY=OFF \
+    -DCHANNEL_TSMF=OFF \
+    -DCHANNEL_URBDRC=OFF \
+    -DCHANNEL_VIDEO=OFF \
+    -DWITH_THIRD_PARTY=OFF \
+    -DWITH_MANPAGES=OFF \
+    -DWITH_WINPR_TOOLS=OFF \
+    -DWITH_OPENSSL=ON \
+    -DWITH_MBEDTLS=OFF \
+    -DWITH_OPENH264=OFF \
+    -DWITH_FFMPEG=OFF \
+    -DWITH_SWSCALE=OFF \
+    -DWITH_SIMD=OFF \
+    -DWITH_JPEG=OFF \
+    -DWITH_CUPS=OFF \
+    -DWITH_PCSC=OFF \
+    -DWITH_FUSE=OFF \
+    -DWITH_MACAUDIO=ON \
+    -DWITH_VERBOSE_WINPR_ASSERT=ON \
+    -DWITH_DEBUG_ALL=OFF \
+    -DWITH_DEBUG_CERTIFICATE=OFF \
+    -DWITH_DEBUG_KBD=OFF
+
+"$cmake_bin" --build "$freerdp_build"
+"$cmake_bin" --install "$freerdp_build"
+
+archive_list="$build_root/native-archives.txt"
+find "$freerdp_prefix/lib" "$openssl_prefix/lib" -type f -name '*.a' -print | sort > "$archive_list"
+if [ ! -s "$archive_list" ]; then
+    echo "error: no static native dependency archives were produced" >&2
+    exit 1
+fi
+
+# Apple libtool creates one private aggregate archive so Xcode consumers never
+# need Homebrew paths or a fragile hand-maintained transitive library list.
+# Archive paths come only from the two fixed installation prefixes above.
+archives=$(cat "$archive_list")
+# shellcheck disable=SC2086
+xcrun libtool -static -o "$combined_lib" $archives
+
+printf '%s\n' "$expected_manifest" > "$stamp_file"
+echo "Built native dependencies: $artifact_root"
