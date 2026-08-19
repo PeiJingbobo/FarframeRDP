@@ -77,6 +77,7 @@ private enum ConnectionWorkerEvent: Sendable {
     case clipboardData(UInt64, ClipboardContentKind, Data?)
     case clipboardFileApprovalRequested(ClipboardFileTransferApproval)
     case clipboardFilesReady(UInt64, [URL])
+    case clipboardFilesFailed(UInt64)
     case clipboardTransferProgress(UInt64?, ClipboardTransferProgress?)
     case displayControlReady
     case failed(ConnectionFailure)
@@ -116,6 +117,90 @@ struct ClipboardFileTransferApproval: Sendable {
     let direction: ClipboardFileTransferDirection
     let fileCount: Int
     let totalBytes: UInt64
+    let fileNames: [String]
+
+    init(
+        direction: ClipboardFileTransferDirection,
+        fileCount: Int,
+        totalBytes: UInt64,
+        fileNames: [String] = []
+    ) {
+        self.direction = direction
+        self.fileCount = fileCount
+        self.totalBytes = totalBytes
+        self.fileNames = fileNames
+    }
+}
+
+enum ClipboardDirectSaveDestination: Equatable, Sendable {
+    case file(URL)
+    case directory(URL)
+}
+
+enum ClipboardFileTransferConfirmationDecision: Equatable, Sendable {
+    case cancel
+    case confirmCopy(suppressFurtherPrompts: Bool)
+    case directSave(ClipboardDirectSaveDestination, suppressFurtherPrompts: Bool)
+
+    var approved: Bool {
+        switch self {
+        case .cancel:
+            false
+        case .confirmCopy, .directSave:
+            true
+        }
+    }
+
+    var suppressesFurtherPrompts: Bool {
+        switch self {
+        case .cancel:
+            false
+        case let .confirmCopy(suppress), let .directSave(_, suppress):
+            suppress
+        }
+    }
+}
+
+struct RemoteClipboardFileConfirmationPolicy: Equatable, Sendable {
+    private(set) var suppressForSession = false
+
+    func requiresApproval(profileRequiresApproval: Bool) -> Bool {
+        profileRequiresApproval && !suppressForSession
+    }
+
+    mutating func record(_ decision: ClipboardFileTransferConfirmationDecision) {
+        if decision.approved, decision.suppressesFurtherPrompts {
+            suppressForSession = true
+        }
+    }
+
+    mutating func reset() {
+        suppressForSession = false
+    }
+}
+
+struct RemoteClipboardFileTransferGate: Equatable, Sendable {
+    private(set) var approvalResolved: Bool
+    private(set) var approved: Bool
+    private(set) var transferRequested = false
+
+    init(requiresApproval: Bool) {
+        approvalResolved = !requiresApproval
+        approved = !requiresApproval
+    }
+
+    mutating func resolveApproval(_ approved: Bool) -> Bool {
+        guard !approvalResolved else { return false }
+        approvalResolved = true
+        self.approved = approved
+        return true
+    }
+
+    mutating func beginTransfer() -> Bool {
+        guard approvalResolved, approved, !transferRequested else { return false }
+        transferRequested = true
+        return true
+    }
 }
 
 struct ClipboardTransferProgress: Equatable, Sendable {
@@ -130,6 +215,7 @@ private final class RemoteClipboardDownloadState: @unchecked Sendable {
     let generation: UInt64
     let files: [ClipboardRemoteFileDescriptor]
     let directory: URL
+    let clipboardLocked: Bool
     var completedURLs: [URL] = []
     var fileIndex = 0
     var offset: UInt64 = 0
@@ -137,10 +223,16 @@ private final class RemoteClipboardDownloadState: @unchecked Sendable {
     var pendingStreamID: UInt32 = 0
     var pendingKind = FFR_CLIPBOARD_FILE_REQUEST_SIZE
 
-    init(generation: UInt64, files: [ClipboardRemoteFileDescriptor], directory: URL) {
+    init(
+        generation: UInt64,
+        files: [ClipboardRemoteFileDescriptor],
+        directory: URL,
+        clipboardLocked: Bool
+    ) {
         self.generation = generation
         self.files = files
         self.directory = directory
+        self.clipboardLocked = clipboardLocked
     }
 }
 
@@ -521,11 +613,32 @@ private final class ConnectionWorker: @unchecked Sendable {
 
     func beginRemoteFileDownload(
         generation: UInt64,
-        files: [ClipboardRemoteFileDescriptor]
+        files: [ClipboardRemoteFileDescriptor],
+        destinationDirectory: URL,
+        clipboardLocked: Bool = false
     ) {
         clipboardFileQueue.async { [weak self] in
-            self?.startRemoteFileDownload(generation: generation, files: files)
+            self?.startRemoteFileDownload(
+                generation: generation,
+                files: files,
+                destinationDirectory: destinationDirectory,
+                clipboardLocked: clipboardLocked
+            )
         }
+    }
+
+    func lockRemoteClipboard(generation: UInt64) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let current = session else { return false }
+        return FFRSessionLockRemoteClipboard(current, generation) == FFR_RESULT_OK
+    }
+
+    private func unlockRemoteClipboard(generation: UInt64) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let current = session else { return }
+        _ = FFRSessionUnlockRemoteClipboard(current, generation)
     }
 
     func cancelRemoteFileDownload() {
@@ -556,7 +669,9 @@ private final class ConnectionWorker: @unchecked Sendable {
 
     private func startRemoteFileDownload(
         generation: UInt64,
-        files: [ClipboardRemoteFileDescriptor]
+        files: [ClipboardRemoteFileDescriptor],
+        destinationDirectory: URL,
+        clipboardLocked: Bool
     ) {
         finishRemoteFileDownload(success: false, cancelled: true)
         guard !files.isEmpty,
@@ -572,21 +687,36 @@ private final class ConnectionWorker: @unchecked Sendable {
             guard freeBytes > totalBytes + 256 * 1024 * 1024 else {
                 throw CocoaError(.fileWriteOutOfSpace)
             }
-            let directory = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
-            try FileManager.default.createDirectory(
-                at: directory,
-                withIntermediateDirectories: false,
-                attributes: [.posixPermissions: 0o700]
+            let directory = destinationDirectory.standardizedFileURL
+            try validateRemoteFilePlaceholderDirectory(
+                directory,
+                root: root.standardizedFileURL,
+                files: files
             )
             remoteDownload = RemoteClipboardDownloadState(
                 generation: generation,
                 files: files,
-                directory: directory
+                directory: directory,
+                clipboardLocked: clipboardLocked
             )
             publishRemoteFileProgress(failed: false)
             requestCurrentRemoteFileSize()
         } catch {
-            finishRemoteFileDownload(success: false, cancelled: false)
+            if destinationDirectory.standardizedFileURL.deletingLastPathComponent() ==
+                root.standardizedFileURL {
+                try? FileManager.default.removeItem(at: destinationDirectory)
+            }
+            if clipboardLocked {
+                unlockRemoteClipboard(generation: generation)
+            }
+            handler(id, .clipboardFilesFailed(generation))
+            handler(id, .clipboardTransferProgress(generation, ClipboardTransferProgress(
+                direction: .windowsToMac,
+                fileCount: files.count,
+                completedBytes: 0,
+                totalBytes: totalBytes,
+                failed: true
+            )))
         }
     }
 
@@ -604,6 +734,34 @@ private final class ConnectionWorker: @unchecked Sendable {
         }
         guard chmod(root.path, 0o700) == 0 else {
             throw CocoaError(.fileWriteNoPermission)
+        }
+    }
+
+    private func validateRemoteFilePlaceholderDirectory(
+        _ directory: URL,
+        root: URL,
+        files: [ClipboardRemoteFileDescriptor]
+    ) throws {
+        guard directory.isFileURL,
+              directory.deletingLastPathComponent() == root else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
+        var directoryStatus = stat()
+        guard lstat(directory.path, &directoryStatus) == 0,
+              directoryStatus.st_mode & S_IFMT == S_IFDIR,
+              directoryStatus.st_mode & S_IFMT != S_IFLNK else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
+        for file in files {
+            let url = directory.appendingPathComponent(file.name, isDirectory: false)
+            var status = stat()
+            guard lstat(url.path, &status) == 0,
+                  status.st_mode & S_IFMT == S_IFREG,
+                  status.st_mode & S_IFMT != S_IFLNK,
+                  status.st_nlink == 1,
+                  status.st_size == off_t(file.size) else {
+                throw CocoaError(.fileWriteInvalidFileName)
+            }
         }
     }
 
@@ -723,9 +881,12 @@ private final class ConnectionWorker: @unchecked Sendable {
                 }
                 return
             }
+            let file = download.files[download.fileIndex]
+            let remaining = file.size - download.offset
             guard !data.isEmpty,
                   download.descriptor >= 0,
-                  data.count <= 1024 * 1024 else {
+                  data.count <= 1024 * 1024,
+                  UInt64(data.count) <= remaining else {
                 self.finishRemoteFileDownload(success: false, cancelled: false)
                 return
             }
@@ -746,8 +907,16 @@ private final class ConnectionWorker: @unchecked Sendable {
         guard let download = remoteDownload else { return false }
         let file = download.files[download.fileIndex]
         let url = download.directory.appendingPathComponent(file.name, isDirectory: false)
-        let descriptor = open(url.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+        let descriptor = open(url.path, O_WRONLY | O_NOFOLLOW)
         guard descriptor >= 0 else { return false }
+        var status = stat()
+        guard fstat(descriptor, &status) == 0,
+              status.st_mode & S_IFMT == S_IFREG,
+              status.st_nlink == 1,
+              ftruncate(descriptor, 0) == 0 else {
+            close(descriptor)
+            return false
+        }
         download.descriptor = descriptor
         download.offset = 0
         download.completedURLs.append(url)
@@ -789,12 +958,16 @@ private final class ConnectionWorker: @unchecked Sendable {
     private func finishRemoteFileDownload(success: Bool, cancelled: Bool) {
         guard let download = remoteDownload else { return }
         remoteDownload = nil
+        if download.clipboardLocked {
+            unlockRemoteClipboard(generation: download.generation)
+        }
         if download.descriptor >= 0 { close(download.descriptor) }
         if success {
             handler(id, .clipboardFilesReady(download.generation, download.completedURLs))
             handler(id, .clipboardTransferProgress(download.generation, nil))
         } else {
             try? FileManager.default.removeItem(at: download.directory)
+            handler(id, .clipboardFilesFailed(download.generation))
             if !cancelled {
                 handler(id, .clipboardTransferProgress(download.generation, ClipboardTransferProgress(
                     direction: .windowsToMac,
@@ -1542,11 +1715,22 @@ final class SessionCoordinator: ObservableObject {
     ) -> Void)?
     var onCursorUpdate: (@MainActor (RemoteCursorUpdate) -> Void)?
     var onClipboardContentReceived: (@MainActor (ClipboardPayloadSet) -> Void)?
-    var onClipboardFilesReceived: (@MainActor ([URL]) -> Void)?
+    var onClipboardFilesOffered: (@MainActor (
+        UInt64,
+        [ClipboardRemoteFileDescriptor]
+    ) -> Void)?
+    var onClipboardFilesDirectSaveRequested: (@MainActor (
+        UInt64,
+        [ClipboardRemoteFileDescriptor],
+        ClipboardDirectSaveDestination
+    ) -> Void)?
+    var onClipboardFilesReceived: (@MainActor (UInt64, [URL]) -> Void)?
+    var onClipboardFilesFailed: (@MainActor (UInt64) -> Void)?
     var onClipboardFileTransferConfirmation: (@MainActor (
         ClipboardFileTransferApproval,
-        @escaping @MainActor (Bool) -> Void
+        @escaping @MainActor (ClipboardFileTransferConfirmationDecision) -> Void
     ) -> Void)?
+    var onClipboardFileTransferConfirmationCancellation: (@MainActor () -> Void)?
     var onDynamicResolutionReady: (@MainActor () -> Void)?
     var localClipboardContentProvider: (@MainActor () -> ClipboardPayloadSet)?
 
@@ -1562,6 +1746,12 @@ final class SessionCoordinator: ObservableObject {
     )?
     private var clipboardDataRequestToken: UInt64 = 0
     private var completedRemoteFileGeneration: UInt64?
+    private var remoteFileConfirmationPolicy = RemoteClipboardFileConfirmationPolicy()
+    private var pendingRemoteFiles: (
+        generation: UInt64,
+        files: [ClipboardRemoteFileDescriptor],
+        gate: RemoteClipboardFileTransferGate
+    )?
 
     var isActive: Bool {
         switch phase {
@@ -1599,6 +1789,8 @@ final class SessionCoordinator: ObservableObject {
         remoteClipboardGeneration = 0
         activeChannelOptions = channelOptions
         pendingRemoteClipboard = nil
+        pendingRemoteFiles = nil
+        remoteFileConfirmationPolicy.reset()
         completedRemoteFileGeneration = nil
         clipboardDataRequestToken &+= 1
         clipboardTransferProgress = nil
@@ -1622,6 +1814,8 @@ final class SessionCoordinator: ObservableObject {
         guard let id = stateMachine.sessionID, isActive else {
             return
         }
+        onClipboardFileTransferConfirmationCancellation?()
+        pendingRemoteFiles = nil
         if phase != .disconnecting {
             _ = stateMachine.transition(sessionID: id, to: .disconnecting)
             phase = stateMachine.phase
@@ -1667,6 +1861,32 @@ final class SessionCoordinator: ObservableObject {
         clipboardTransferProgress = nil
     }
 
+    func requestRemoteClipboardFiles(generation: UInt64, destinationDirectory: URL) {
+        guard var pending = pendingRemoteFiles,
+              pending.generation == generation,
+              pending.gate.beginTransfer(),
+              generation == remoteClipboardGeneration else { return }
+        pendingRemoteFiles = pending
+        let clipboardLocked = worker?.lockRemoteClipboard(generation: generation) == true
+        if !clipboardLocked {
+            FarframeLog.logger(for: .channel).info(
+                "Remote clipboard lock unavailable; using current-generation file transfer fallback"
+            )
+        }
+        worker?.beginRemoteFileDownload(
+            generation: generation,
+            files: pending.files,
+            destinationDirectory: destinationDirectory,
+            clipboardLocked: clipboardLocked
+        )
+    }
+
+    func cancelRemoteClipboardFiles(generation: UInt64) {
+        guard pendingRemoteFiles?.generation == generation else { return }
+        pendingRemoteFiles = nil
+        worker?.cancelRemoteFileDownload()
+    }
+
     private func handle(id: UUID, event: ConnectionWorkerEvent) {
         guard stateMachine.sessionID == id else {
             return
@@ -1704,9 +1924,17 @@ final class SessionCoordinator: ObservableObject {
             FarframeLog.logger(for: .channel).info(
                 "Remote clipboard offer generation=\(generation, privacy: .public) recognizedFormats=\(formats.count, privacy: .public) kinds=\(formats.map { $0.kind.rawValue.description }.joined(separator: ","), privacy: .public)"
             )
+            let invalidatedGeneration = remoteClipboardGeneration
+            if pendingRemoteFiles != nil {
+                onClipboardFileTransferConfirmationCancellation?()
+            }
+            if invalidatedGeneration != 0 {
+                onClipboardFilesFailed?(invalidatedGeneration)
+            }
             worker?.cancelRemoteFileDownload()
             clipboardDataRequestToken &+= 1
             remoteClipboardGeneration = generation
+            pendingRemoteFiles = nil
             completedRemoteFileGeneration = nil
             guard activeChannelOptions.clipboardEnabled,
                   activeChannelOptions.clipboardDirection.allowsRemoteToLocal else {
@@ -1769,24 +1997,53 @@ final class SessionCoordinator: ObservableObject {
                 if let list = pending.payloads[.fileList],
                    let files = ClipboardFileListCodec.decode(list) {
                     contentPayloads[.fileList] = nil
-                    let approval = ClipboardFileTransferApproval(
-                        direction: .windowsToMac,
-                        fileCount: files.count,
-                        totalBytes: files.reduce(0) { $0 + $1.size }
+                    let requiresApproval = remoteFileConfirmationPolicy.requiresApproval(
+                        profileRequiresApproval: activeChannelOptions.confirmClipboardFiles
                     )
-                    let start: @MainActor (Bool) -> Void = { [weak self] approved in
+                    let gate = RemoteClipboardFileTransferGate(requiresApproval: requiresApproval)
+                    pendingRemoteFiles = (generation, files, gate)
+                    let resolve: @MainActor (ClipboardFileTransferConfirmationDecision) -> Void = {
+                        [weak self] decision in
                         guard let self,
-                              approved,
+                              var current = self.pendingRemoteFiles,
+                              current.generation == generation,
                               generation == self.remoteClipboardGeneration else { return }
-                        self.worker?.beginRemoteFileDownload(
-                            generation: generation,
-                            files: files
-                        )
+                        if requiresApproval {
+                            guard current.gate.resolveApproval(decision.approved) else { return }
+                        }
+                        guard current.gate.approved else {
+                            self.pendingRemoteFiles = nil
+                            return
+                        }
+                        self.remoteFileConfirmationPolicy.record(decision)
+                        self.pendingRemoteFiles = current
+                        switch decision {
+                        case .cancel:
+                            self.pendingRemoteFiles = nil
+                        case .confirmCopy:
+                            self.onClipboardFilesOffered?(generation, current.files)
+                        case let .directSave(destination, _):
+                            self.onClipboardFilesDirectSaveRequested?(
+                                generation,
+                                current.files,
+                                destination
+                            )
+                        }
                     }
-                    if activeChannelOptions.confirmClipboardFiles {
-                        onClipboardFileTransferConfirmation?(approval, start)
+                    if requiresApproval {
+                        let approval = ClipboardFileTransferApproval(
+                            direction: .windowsToMac,
+                            fileCount: files.count,
+                            totalBytes: files.reduce(0) { $0 + $1.size },
+                            fileNames: files.map(\.name)
+                        )
+                        guard let confirmation = onClipboardFileTransferConfirmation else {
+                            pendingRemoteFiles = nil
+                            break
+                        }
+                        confirmation(approval, resolve)
                     } else {
-                        start(true)
+                        resolve(.confirmCopy(suppressFurtherPrompts: false))
                     }
                 }
                 if !contentPayloads.isEmpty {
@@ -1798,14 +2055,20 @@ final class SessionCoordinator: ObservableObject {
                 worker?.resolveLocalFileTransferApproval(false)
                 break
             }
-            confirmation(approval) { [weak self] approved in
-                self?.worker?.resolveLocalFileTransferApproval(approved)
+            confirmation(approval) { [weak self] decision in
+                self?.worker?.resolveLocalFileTransferApproval(decision.approved)
             }
         case let .clipboardFilesReady(generation, urls):
             guard generation == remoteClipboardGeneration else { break }
             completedRemoteFileGeneration = generation
+            pendingRemoteFiles = nil
+            remoteFileConfirmationPolicy.reset()
             clipboardTransferProgress = nil
-            onClipboardFilesReceived?(urls)
+            onClipboardFilesReceived?(generation, urls)
+        case let .clipboardFilesFailed(generation):
+            guard generation == remoteClipboardGeneration else { break }
+            pendingRemoteFiles = nil
+            onClipboardFilesFailed?(generation)
         case let .clipboardTransferProgress(generation, progress):
             if let generation,
                generation == completedRemoteFileGeneration,
@@ -1825,8 +2088,10 @@ final class SessionCoordinator: ObservableObject {
             self.failure = failure
             transition(id: id, to: .failed)
         case .finished:
+            onClipboardFileTransferConfirmationCancellation?()
             worker = nil
             pendingRemoteClipboard = nil
+            pendingRemoteFiles = nil
             completedRemoteFileGeneration = nil
             clipboardDataRequestToken &+= 1
             clipboardTransferProgress = nil

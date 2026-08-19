@@ -448,6 +448,16 @@ FFRResult FFRSessionRequestRemoteFileContents(FFRSession *session,
                                               uint64_t offset,
                                               uint32_t requestedBytes);
 
+/// Locks the current remote clipboard generation while promised files are
+/// consumed. Safe from any thread while connected. Returns INVALID_STATE when
+/// the server did not negotiate CB_CAN_LOCK_CLIPDATA.
+FFRResult FFRSessionLockRemoteClipboard(FFRSession *session, uint64_t generation);
+
+/// Releases a previously locked remote clipboard generation. Safe from any
+/// thread while connected and idempotent for a generation that is no longer
+/// locked.
+FFRResult FFRSessionUnlockRemoteClipboard(FFRSession *session, uint64_t generation);
+
 /// Drops unsent input and enqueues a release barrier. The owner thread releases
 /// every scan code and pointer button known to be down. Safe from any thread.
 FFRResult FFRSessionReleaseAllInput(FFRSession *session);

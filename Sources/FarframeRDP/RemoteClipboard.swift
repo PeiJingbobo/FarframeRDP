@@ -512,6 +512,149 @@ enum ClipboardDIBCodec {
     }
 }
 
+private final class RemoteClipboardFileDataProvider: NSObject, NSPasteboardItemDataProvider,
+    @unchecked Sendable {
+    let generation: UInt64
+    private let lock = NSLock()
+    private var items: [ObjectIdentifier: URL] = [:]
+
+    init(generation: UInt64) {
+        self.generation = generation
+    }
+
+    func register(_ item: NSPasteboardItem, url: URL) {
+        lock.withLock {
+            items[ObjectIdentifier(item)] = url
+        }
+    }
+
+    nonisolated func pasteboard(
+        _ pasteboard: NSPasteboard?,
+        item: NSPasteboardItem,
+        provideDataForType type: NSPasteboard.PasteboardType
+    ) {
+        guard type == .fileURL else { return }
+        if let url = lock.withLock({ items[ObjectIdentifier(item)] }) {
+            item.setString(url.absoluteString, forType: .fileURL)
+        }
+    }
+
+    nonisolated func pasteboardFinishedWithDataProvider(_ pasteboard: NSPasteboard) {
+        // Supplying every placeholder URL only means Finder finished inspecting
+        // the pasteboard. Clipboard ownership is tracked by changeCount instead.
+    }
+}
+
+private final class RemoteClipboardFilePresenter: NSObject, NSFilePresenter,
+    @unchecked Sendable {
+    typealias Reader = @Sendable ((@Sendable () -> Void)?) -> Void
+
+    let presentedItemURL: URL?
+    let presentedItemOperationQueue: OperationQueue
+    private let onRead: @Sendable (@escaping Reader) -> Void
+
+    init(
+        url: URL,
+        onRead: @escaping @Sendable (@escaping Reader) -> Void
+    ) {
+        presentedItemURL = url
+        presentedItemOperationQueue = OperationQueue()
+        presentedItemOperationQueue.name = "Farframe remote clipboard file presenter"
+        presentedItemOperationQueue.maxConcurrentOperationCount = 1
+        self.onRead = onRead
+    }
+
+    func relinquishPresentedItem(
+        toReader reader: @escaping Reader
+    ) {
+        onRead(reader)
+    }
+}
+
+private final class RemoteClipboardFileMaterializer: @unchecked Sendable {
+    typealias Reader = RemoteClipboardFilePresenter.Reader
+
+    let generation: UInt64
+    let directory: URL
+    let urls: [URL]
+    private let onRequest: @MainActor (UInt64, URL) -> Void
+    private let lock = NSLock()
+    private var readers: [Reader] = []
+    private var requested = false
+    private var completed = false
+    private var cancelled = false
+    private var presenters: [RemoteClipboardFilePresenter] = []
+
+    var isComplete: Bool {
+        lock.withLock { completed }
+    }
+
+    init(
+        generation: UInt64,
+        directory: URL,
+        urls: [URL],
+        onRequest: @escaping @MainActor (UInt64, URL) -> Void
+    ) {
+        self.generation = generation
+        self.directory = directory
+        self.urls = urls
+        self.onRequest = onRequest
+        presenters = urls.map { url in
+            RemoteClipboardFilePresenter(url: url) { [weak self] reader in
+                self?.requestRead(reader)
+            }
+        }
+        presenters.forEach(NSFileCoordinator.addFilePresenter)
+    }
+
+    deinit {
+        presenters.forEach(NSFileCoordinator.removeFilePresenter)
+    }
+
+    func finish(success: Bool) {
+        let pending: [Reader] = lock.withLock {
+            guard !completed, !cancelled else { return [] }
+            completed = success
+            cancelled = !success
+            let pending = readers
+            readers.removeAll()
+            return pending
+        }
+        pending.forEach { $0(nil) }
+    }
+
+    func cancel() {
+        let pending: [Reader] = lock.withLock {
+            guard !cancelled else { return [] }
+            cancelled = true
+            let pending = readers
+            readers.removeAll()
+            return pending
+        }
+        pending.forEach { $0(nil) }
+    }
+
+    private func requestRead(_ reader: @escaping Reader) {
+        let action: (releaseImmediately: Bool, beginRequest: Bool) = lock.withLock {
+            if completed || cancelled {
+                return (true, false)
+            }
+            readers.append(reader)
+            guard !requested else { return (false, false) }
+            requested = true
+            return (false, true)
+        }
+        if action.releaseImmediately {
+            reader(nil)
+        } else if action.beginRequest {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.onRequest(self.generation, self.directory)
+            }
+        }
+    }
+}
+
 @MainActor
 final class RemoteClipboardController: ObservableObject {
     private struct PasteboardSnapshot: Sendable {
@@ -529,20 +672,49 @@ final class RemoteClipboardController: ObservableObject {
         let image: ClipboardDecodedImage?
     }
 
+    private struct DirectSaveTransfer: @unchecked Sendable {
+        let generation: UInt64
+        let stagingDirectory: URL
+        let stagingURLs: [URL]
+        let targetURLs: [URL]
+        let allowsReplacingTarget: Bool
+        let onCancel: @MainActor (UInt64) -> Void
+        let onCompletion: @MainActor (Bool, [URL]) -> Void
+    }
+
     private static let pngType = NSPasteboard.PasteboardType("public.png")
     private static let jpegType = NSPasteboard.PasteboardType("public.jpeg")
 
     private let pasteboard: NSPasteboard
+    private let notificationCenter: NotificationCenter
+    private let deferRemoteFileOffersWhileApplicationActive: Bool
+    private let isApplicationActive: @MainActor () -> Bool
     private var timer: Timer?
+    private var applicationResignObserver: NSObjectProtocol?
     private var lastChangeCount: Int
     private var applyingRemoteContent = false
     private var ownedRemoteFileDirectory: URL?
+    private var remoteFileProvider: RemoteClipboardFileDataProvider?
+    private var remoteFileMaterializer: RemoteClipboardFileMaterializer?
+    private var remoteFileItems: [NSPasteboardItem] = []
+    private var remoteFileOfferPublished = false
+    private var onRemoteFilePromiseCancelled: (@MainActor (UInt64) -> Void)?
+    private var directSaveTransfer: DirectSaveTransfer?
     private var contentRevision: UInt64 = 0
     private var latestContent = ClipboardPayloadSet()
     var onLocalContentChange: (@MainActor (ClipboardPayloadSet) -> Void)?
 
-    init(pasteboard: NSPasteboard = .general) {
+    init(
+        pasteboard: NSPasteboard = .general,
+        notificationCenter: NotificationCenter = .default,
+        deferRemoteFileOffersWhileApplicationActive: Bool = true,
+        isApplicationActive: @escaping @MainActor () -> Bool = { NSApp.isActive }
+    ) {
         self.pasteboard = pasteboard
+        self.notificationCenter = notificationCenter
+        self.deferRemoteFileOffersWhileApplicationActive =
+            deferRemoteFileOffersWhileApplicationActive
+        self.isApplicationActive = isApplicationActive
         self.lastChangeCount = pasteboard.changeCount
     }
 
@@ -552,13 +724,35 @@ final class RemoteClipboardController: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.poll() }
         }
+        applicationResignObserver = notificationCenter.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.publishDeferredRemoteFileOffer() }
+        }
         publishCurrentContent()
     }
 
     func stop() {
         timer?.invalidate()
         timer = nil
+        if let applicationResignObserver {
+            notificationCenter.removeObserver(applicationResignObserver)
+            self.applicationResignObserver = nil
+        }
         contentRevision &+= 1
+        let hadPublishedUnfulfilledPromise = remoteFileOfferPublished &&
+            remoteFileMaterializer?.isComplete == false
+        discardRemoteFilePromise(notifyCancellation: true)
+        discardDirectSaveTransfer(notifyCancellation: true)
+        removeOwnedRemoteFiles()
+        if hadPublishedUnfulfilledPromise {
+            applyingRemoteContent = true
+            pasteboard.clearContents()
+            lastChangeCount = pasteboard.changeCount
+            applyingRemoteContent = false
+        }
         onLocalContentChange = nil
     }
 
@@ -697,6 +891,7 @@ final class RemoteClipboardController: ObservableObject {
             hasRepresentation = true
         }
         guard hasRepresentation else { return }
+        discardRemoteFilePromise(notifyCancellation: true)
         applyingRemoteContent = true
         pasteboard.clearContents()
         pasteboard.writeObjects([item])
@@ -712,6 +907,7 @@ final class RemoteClipboardController: ObservableObject {
               urls.allSatisfy({ $0.deletingLastPathComponent() == directory }) else {
             return
         }
+        discardRemoteFilePromise(notifyCancellation: true)
         removeOwnedRemoteFiles()
         contentRevision &+= 1
         applyingRemoteContent = true
@@ -724,6 +920,139 @@ final class RemoteClipboardController: ObservableObject {
         ownedRemoteFileDirectory = directory
         lastChangeCount = pasteboard.changeCount
         applyingRemoteContent = false
+    }
+
+    @discardableResult
+    func offerRemoteFiles(
+        generation: UInt64,
+        files: [ClipboardRemoteFileDescriptor],
+        onRequest: @escaping @MainActor (UInt64, URL) -> Void,
+        onCancel: @escaping @MainActor (UInt64) -> Void
+    ) -> Bool {
+        guard generation != 0,
+              !files.isEmpty,
+              files.count <= ClipboardFilePolicy.maximumFileCount,
+              files.allSatisfy({ ClipboardFilePolicy.acceptedName($0.name) != nil }),
+              let prepared = Self.prepareRemoteFilePlaceholders(files: files) else {
+            return false
+        }
+        discardRemoteFilePromise(notifyCancellation: true)
+        discardDirectSaveTransfer(notifyCancellation: true)
+        removeOwnedRemoteFiles()
+        contentRevision &+= 1
+
+        let provider = RemoteClipboardFileDataProvider(generation: generation)
+        let items = prepared.urls.map { url in
+            let item = NSPasteboardItem()
+            provider.register(item, url: url)
+            item.setDataProvider(provider, forTypes: [.fileURL])
+            return item
+        }
+        let materializer = RemoteClipboardFileMaterializer(
+            generation: generation,
+            directory: prepared.directory,
+            urls: prepared.urls,
+            onRequest: onRequest
+        )
+
+        remoteFileProvider = provider
+        remoteFileMaterializer = materializer
+        remoteFileItems = items
+        ownedRemoteFileDirectory = prepared.directory
+        onRemoteFilePromiseCancelled = onCancel
+        if deferRemoteFileOffersWhileApplicationActive && isApplicationActive() {
+            return true
+        }
+        return publishDeferredRemoteFileOffer()
+    }
+
+    @discardableResult
+    func saveRemoteFiles(
+        generation: UInt64,
+        files: [ClipboardRemoteFileDescriptor],
+        destination: ClipboardDirectSaveDestination,
+        onRequest: @escaping @MainActor (UInt64, URL) -> Void,
+        onCancel: @escaping @MainActor (UInt64) -> Void,
+        onCompletion: @escaping @MainActor (Bool, [URL]) -> Void
+    ) -> Bool {
+        guard generation != 0,
+              !files.isEmpty,
+              files.count <= ClipboardFilePolicy.maximumFileCount,
+              files.allSatisfy({ ClipboardFilePolicy.acceptedName($0.name) != nil }),
+              let targets = Self.directSaveTargets(for: files, destination: destination),
+              let prepared = Self.prepareRemoteFilePlaceholders(files: files) else {
+            return false
+        }
+        discardRemoteFilePromise(notifyCancellation: true)
+        discardDirectSaveTransfer(notifyCancellation: true)
+        directSaveTransfer = DirectSaveTransfer(
+            generation: generation,
+            stagingDirectory: prepared.directory,
+            stagingURLs: prepared.urls,
+            targetURLs: targets.urls,
+            allowsReplacingTarget: targets.allowsReplacingTarget,
+            onCancel: onCancel,
+            onCompletion: onCompletion
+        )
+        onRequest(generation, prepared.directory)
+        return true
+    }
+
+    @discardableResult
+    private func publishDeferredRemoteFileOffer() -> Bool {
+        guard remoteFileProvider != nil else { return false }
+        guard !remoteFileOfferPublished else { return true }
+        applyingRemoteContent = true
+        pasteboard.clearContents()
+        guard pasteboard.writeObjects(remoteFileItems) else {
+            applyingRemoteContent = false
+            discardRemoteFilePromise(notifyCancellation: true)
+            removeOwnedRemoteFiles()
+            return false
+        }
+        remoteFileOfferPublished = true
+        lastChangeCount = pasteboard.changeCount
+        applyingRemoteContent = false
+        return true
+    }
+
+    @discardableResult
+    func fulfillRemoteFiles(generation: UInt64, urls: [URL]) -> Bool {
+        if let materializer = remoteFileMaterializer,
+           materializer.generation == generation,
+           urls == materializer.urls {
+            materializer.finish(success: true)
+            onRemoteFilePromiseCancelled = nil
+            return true
+        }
+        guard let transfer = directSaveTransfer,
+              transfer.generation == generation,
+              urls == transfer.stagingURLs else { return false }
+        directSaveTransfer = nil
+        Task.detached(priority: .userInitiated) {
+            let installed = Self.installDirectSaveTransfer(transfer)
+            await MainActor.run {
+                transfer.onCompletion(installed, installed ? transfer.targetURLs : [])
+            }
+        }
+        return true
+    }
+
+    func cancelRemoteFileOffer(generation: UInt64) {
+        if remoteFileProvider?.generation == generation {
+            let wasPublished = remoteFileOfferPublished
+            discardRemoteFilePromise(notifyCancellation: false)
+            removeOwnedRemoteFiles()
+            if wasPublished {
+                applyingRemoteContent = true
+                pasteboard.clearContents()
+                lastChangeCount = pasteboard.changeCount
+                applyingRemoteContent = false
+            }
+        }
+        if directSaveTransfer?.generation == generation {
+            discardDirectSaveTransfer(notifyCancellation: false)
+        }
     }
 
     private func publishCurrentContent() {
@@ -744,8 +1073,196 @@ final class RemoteClipboardController: ObservableObject {
         guard pasteboard.changeCount != lastChangeCount else { return }
         lastChangeCount = pasteboard.changeCount
         guard !applyingRemoteContent else { return }
+        discardRemoteFilePromise(notifyCancellation: true)
         removeOwnedRemoteFiles()
         publishCurrentContent()
+    }
+
+    private func discardRemoteFilePromise(notifyCancellation: Bool) {
+        guard let provider = remoteFileProvider else { return }
+        remoteFileProvider = nil
+        let materializer = remoteFileMaterializer
+        remoteFileMaterializer = nil
+        remoteFileItems = []
+        remoteFileOfferPublished = false
+        removeOwnedRemoteFiles()
+        materializer?.cancel()
+        let cancellation = onRemoteFilePromiseCancelled
+        onRemoteFilePromiseCancelled = nil
+        if notifyCancellation, materializer?.isComplete == false {
+            cancellation?(provider.generation)
+        }
+    }
+
+    private func discardDirectSaveTransfer(notifyCancellation: Bool) {
+        guard let transfer = directSaveTransfer else { return }
+        directSaveTransfer = nil
+        try? FileManager.default.removeItem(at: transfer.stagingDirectory)
+        if notifyCancellation {
+            transfer.onCancel(transfer.generation)
+        }
+    }
+
+    private static func directSaveTargets(
+        for files: [ClipboardRemoteFileDescriptor],
+        destination: ClipboardDirectSaveDestination
+    ) -> (urls: [URL], allowsReplacingTarget: Bool)? {
+        let manager = FileManager.default
+        switch destination {
+        case let .file(url):
+            guard files.count == 1,
+                  url.isFileURL,
+                  acceptedDirectSaveDirectory(url.deletingLastPathComponent()),
+                  ClipboardFilePolicy.acceptedName(url.lastPathComponent) != nil else {
+                return nil
+            }
+            var status = stat()
+            if lstat(url.path, &status) == 0 {
+                guard status.st_mode & S_IFMT == S_IFREG,
+                      status.st_mode & S_IFMT != S_IFLNK else { return nil }
+            } else if errno != ENOENT {
+                return nil
+            }
+            return ([url.standardizedFileURL], true)
+        case let .directory(directory):
+            guard acceptedDirectSaveDirectory(directory) else { return nil }
+            let standardized = directory.standardizedFileURL
+            let urls = files.map {
+                standardized.appendingPathComponent($0.name, isDirectory: false)
+            }
+            guard Set(urls).count == urls.count,
+                  urls.allSatisfy({ !manager.fileExists(atPath: $0.path) }) else {
+                return nil
+            }
+            return (urls, false)
+        }
+    }
+
+    nonisolated private static func acceptedDirectSaveDirectory(_ directory: URL) -> Bool {
+        guard directory.isFileURL else { return false }
+        var status = stat()
+        return lstat(directory.standardizedFileURL.path, &status) == 0 &&
+            status.st_mode & S_IFMT == S_IFDIR &&
+            status.st_mode & S_IFMT != S_IFLNK
+    }
+
+    nonisolated private static func installDirectSaveTransfer(
+        _ transfer: DirectSaveTransfer
+    ) -> Bool {
+        let manager = FileManager.default
+        guard transfer.stagingURLs.count == transfer.targetURLs.count,
+              transfer.targetURLs.allSatisfy({
+                  acceptedDirectSaveDirectory($0.deletingLastPathComponent())
+              }) else {
+            try? manager.removeItem(at: transfer.stagingDirectory)
+            return false
+        }
+        if !transfer.allowsReplacingTarget,
+           transfer.targetURLs.contains(where: { manager.fileExists(atPath: $0.path) }) {
+            try? manager.removeItem(at: transfer.stagingDirectory)
+            return false
+        }
+
+        var destinationStagingURLs: [URL] = []
+        var installedTargets: [URL] = []
+        do {
+            for (index, pair) in zip(transfer.stagingURLs, transfer.targetURLs).enumerated() {
+                let (source, target) = pair
+                let destinationStagingURL = target.deletingLastPathComponent()
+                    .appendingPathComponent(
+                        ".farframe-\(UUID().uuidString)-\(index).download",
+                        isDirectory: false
+                    )
+                try manager.copyItem(at: source, to: destinationStagingURL)
+                destinationStagingURLs.append(destinationStagingURL)
+            }
+            for (destinationStagingURL, target) in zip(
+                destinationStagingURLs,
+                transfer.targetURLs
+            ) {
+                if manager.fileExists(atPath: target.path) {
+                    guard transfer.allowsReplacingTarget,
+                          transfer.targetURLs.count == 1 else {
+                        throw CocoaError(.fileWriteFileExists)
+                    }
+                    _ = try manager.replaceItemAt(target, withItemAt: destinationStagingURL)
+                } else {
+                    try manager.moveItem(at: destinationStagingURL, to: target)
+                }
+                installedTargets.append(target)
+            }
+            try? manager.removeItem(at: transfer.stagingDirectory)
+            return true
+        } catch {
+            for target in installedTargets where manager.fileExists(atPath: target.path) {
+                try? manager.removeItem(at: target)
+            }
+            for url in destinationStagingURLs where manager.fileExists(atPath: url.path) {
+                try? manager.removeItem(at: url)
+            }
+            try? manager.removeItem(at: transfer.stagingDirectory)
+            return false
+        }
+    }
+
+    private static func prepareRemoteFilePlaceholders(
+        files: [ClipboardRemoteFileDescriptor]
+    ) -> (directory: URL, urls: [URL])? {
+        let manager = FileManager.default
+        let root = manager.temporaryDirectory
+            .appendingPathComponent("FarframeRDP-Clipboard", isDirectory: true)
+        do {
+            try manager.createDirectory(
+                at: root,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            var rootStatus = stat()
+            guard lstat(root.path, &rootStatus) == 0,
+                  rootStatus.st_mode & S_IFMT == S_IFDIR,
+                  rootStatus.st_mode & S_IFMT != S_IFLNK,
+                  chmod(root.path, 0o700) == 0 else {
+                return nil
+            }
+            let directory = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try manager.createDirectory(
+                at: directory,
+                withIntermediateDirectories: false,
+                attributes: [.posixPermissions: 0o700]
+            )
+            var urls: [URL] = []
+            do {
+                for file in files {
+                    let url = directory.appendingPathComponent(file.name, isDirectory: false)
+                    let descriptor = open(
+                        url.path,
+                        O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW,
+                        0o600
+                    )
+                    guard descriptor >= 0 else {
+                        throw CocoaError(.fileWriteUnknown)
+                    }
+                    let truncated = ftruncate(descriptor, off_t(file.size))
+                    let closed = close(descriptor)
+                    guard truncated == 0, closed == 0 else {
+                        throw CocoaError(.fileWriteUnknown)
+                    }
+                    if let date = file.modificationDate {
+                        try manager.setAttributes(
+                            [.modificationDate: date],
+                            ofItemAtPath: url.path
+                        )
+                    }
+                    urls.append(url)
+                }
+            } catch {
+                try? manager.removeItem(at: directory)
+                throw error
+            }
+            return (directory, urls)
+        } catch {
+            return nil
+        }
     }
 
     private func removeOwnedRemoteFiles() {

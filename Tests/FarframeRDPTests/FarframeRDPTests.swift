@@ -5,6 +5,89 @@ import XCTest
 
 @MainActor
 final class FarframeRDPTests: XCTestCase {
+    func testRemoteClipboardSessionPromptPolicySuppressesOnlyAfterAcceptedChoice() {
+        var policy = RemoteClipboardFileConfirmationPolicy()
+
+        XCTAssertTrue(policy.requiresApproval(profileRequiresApproval: true))
+        policy.record(.cancel)
+        XCTAssertTrue(policy.requiresApproval(profileRequiresApproval: true))
+
+        policy.record(.confirmCopy(suppressFurtherPrompts: true))
+        XCTAssertFalse(policy.requiresApproval(profileRequiresApproval: true))
+        policy.reset()
+        XCTAssertTrue(policy.requiresApproval(profileRequiresApproval: true))
+    }
+
+    func testRemoteClipboardDirectSaveCanSuppressLaterSessionPrompts() {
+        var policy = RemoteClipboardFileConfirmationPolicy()
+        policy.record(.directSave(
+            .directory(URL(fileURLWithPath: "/tmp")),
+            suppressFurtherPrompts: true
+        ))
+
+        XCTAssertFalse(policy.requiresApproval(profileRequiresApproval: true))
+    }
+
+    func testRemoteClipboardFileTransferWaitsForApprovalBeforeFirstRead() {
+        var gate = RemoteClipboardFileTransferGate(requiresApproval: true)
+
+        XCTAssertFalse(gate.beginTransfer())
+        XCTAssertTrue(gate.resolveApproval(true))
+        XCTAssertTrue(gate.beginTransfer())
+        XCTAssertFalse(gate.beginTransfer())
+        XCTAssertFalse(gate.resolveApproval(false))
+    }
+
+    func testRemoteClipboardFileTransferRejectsCancelledApproval() {
+        var gate = RemoteClipboardFileTransferGate(requiresApproval: true)
+
+        XCTAssertTrue(gate.resolveApproval(false))
+        XCTAssertFalse(gate.beginTransfer())
+    }
+
+    func testRemoteClipboardFileTransferWithoutConfirmationCanStartOnce() {
+        var gate = RemoteClipboardFileTransferGate(requiresApproval: false)
+
+        XCTAssertTrue(gate.beginTransfer())
+        XCTAssertFalse(gate.beginTransfer())
+    }
+
+    func testClipboardFileConfirmationUsesCopyLabelsAndThirtySecondTimeout() {
+        let approval = ClipboardFileTransferApproval(
+            direction: .windowsToMac,
+            fileCount: 2,
+            totalBytes: 1_024
+        )
+
+        let alert = ClipboardFileTransferConfirmationPresenter.makeAlert(for: approval)
+
+        XCTAssertEqual(ClipboardFileTransferConfirmationPresenter.timeout, 30)
+        XCTAssertEqual(alert.messageText, "允许从 Windows接收文件？")
+        XCTAssertEqual(alert.buttons.map(\.title), ["确认复制", "取消"])
+        XCTAssertTrue(alert.informativeText.contains("2 个普通文件"))
+        XCTAssertEqual(alert.suppressionButton?.title, "本次不再询问")
+        let directSaveButton = try? XCTUnwrap(alert.accessoryView as? NSButton)
+        XCTAssertEqual(directSaveButton?.title, "直接保存")
+        XCTAssertEqual(
+            directSaveButton?.identifier,
+            ClipboardFileTransferConfirmationPresenter.directSaveIdentifier
+        )
+    }
+
+    func testClipboardFileConfirmationDescribesMacToWindowsDirection() {
+        let approval = ClipboardFileTransferApproval(
+            direction: .macToWindows,
+            fileCount: 1,
+            totalBytes: 0
+        )
+
+        let alert = ClipboardFileTransferConfirmationPresenter.makeAlert(for: approval)
+
+        XCTAssertEqual(alert.messageText, "允许 mac 向 Windows 传输文件？")
+        XCTAssertNil(alert.accessoryView)
+        XCTAssertFalse(alert.showsSuppressionButton)
+    }
+
     func testShortcutCaptureToolbarUsesDistinctAppearanceForEveryState() {
         let states: [ShortcutCaptureStatus] = [
             .inactive, .basic, .enhanced, .degraded, .released,
@@ -577,7 +660,10 @@ final class FarframeRDPTests: XCTestCase {
 
     func testRemoteFilesPublishFileURLsForFinderPaste() throws {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
-        let controller = RemoteClipboardController(pasteboard: pasteboard)
+        let controller = RemoteClipboardController(
+            pasteboard: pasteboard,
+            deferRemoteFileOffersWhileApplicationActive: false
+        )
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -592,6 +678,276 @@ final class FarframeRDPTests: XCTestCase {
             options: [.urlReadingFileURLsOnly: true]
         ) as? [URL]
         XCTAssertEqual(urls, [file])
+    }
+
+    func testRemoteFileOfferPublishesPlaceholderWithoutStartingTransfer() throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        let controller = RemoteClipboardController(
+            pasteboard: pasteboard,
+            deferRemoteFileOffersWhileApplicationActive: false
+        )
+        defer { controller.stop() }
+        var requestCount = 0
+
+        XCTAssertTrue(controller.offerRemoteFiles(
+            generation: 42,
+            files: [ClipboardRemoteFileDescriptor(
+                name: "remote.txt",
+                size: 6,
+                modificationDate: nil
+            )],
+            onRequest: { _, _ in
+                requestCount += 1
+            },
+            onCancel: { _ in }
+        ))
+        XCTAssertEqual(requestCount, 0)
+
+        let item = try XCTUnwrap(pasteboard.pasteboardItems?.first)
+        _ = item.data(forType: .fileURL)
+        let placeholder = try XCTUnwrap(URL(
+            string: try XCTUnwrap(item.string(forType: .fileURL))
+        ))
+        let attributes = try FileManager.default.attributesOfItem(atPath: placeholder.path)
+        XCTAssertEqual(requestCount, 0)
+        XCTAssertEqual(placeholder.lastPathComponent, "remote.txt")
+        XCTAssertEqual((attributes[.size] as? NSNumber)?.uint64Value, 6)
+    }
+
+    func testDirectSaveStartsImmediatelyAndInstallsAtChosenFilePath() async throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        let controller = RemoteClipboardController(
+            pasteboard: pasteboard,
+            deferRemoteFileOffersWhileApplicationActive: false
+        )
+        defer { controller.stop() }
+        let targetDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: targetDirectory,
+            withIntermediateDirectories: false
+        )
+        defer { try? FileManager.default.removeItem(at: targetDirectory) }
+        let target = targetDirectory.appendingPathComponent("renamed.txt")
+        try Data("old".utf8).write(to: target)
+        var stagingDirectory: URL?
+        var completedURLs: [URL] = []
+        let completed = expectation(description: "direct save installed")
+
+        XCTAssertTrue(controller.saveRemoteFiles(
+            generation: 47,
+            files: [ClipboardRemoteFileDescriptor(
+                name: "remote.txt",
+                size: 6,
+                modificationDate: nil
+            )],
+            destination: .file(target),
+            onRequest: { generation, directory in
+                XCTAssertEqual(generation, 47)
+                stagingDirectory = directory
+            },
+            onCancel: { _ in XCTFail("Direct save must not be cancelled") },
+            onCompletion: { succeeded, urls in
+                XCTAssertTrue(succeeded)
+                completedURLs = urls
+                completed.fulfill()
+            }
+        ))
+        let staging = try XCTUnwrap(stagingDirectory)
+        let stagingFile = staging.appendingPathComponent("remote.txt")
+        try Data("remote".utf8).write(to: stagingFile)
+
+        XCTAssertTrue(controller.fulfillRemoteFiles(generation: 47, urls: [stagingFile]))
+        await fulfillment(of: [completed], timeout: 1)
+        XCTAssertEqual(completedURLs, [target])
+        XCTAssertEqual(try Data(contentsOf: target), Data("remote".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staging.path))
+        XCTAssertTrue(pasteboard.pasteboardItems?.isEmpty != false)
+    }
+
+    func testDirectSaveBatchPreservesRemoteNamesInChosenDirectory() async throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        let controller = RemoteClipboardController(pasteboard: pasteboard)
+        defer { controller.stop() }
+        let targetDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: targetDirectory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: targetDirectory) }
+        let files = [
+            ClipboardRemoteFileDescriptor(name: "first.txt", size: 5, modificationDate: nil),
+            ClipboardRemoteFileDescriptor(name: "second.txt", size: 6, modificationDate: nil),
+        ]
+        var stagingDirectory: URL?
+        var completedURLs: [URL] = []
+        let completed = expectation(description: "direct save batch installed")
+
+        XCTAssertTrue(controller.saveRemoteFiles(
+            generation: 48,
+            files: files,
+            destination: .directory(targetDirectory),
+            onRequest: { _, directory in stagingDirectory = directory },
+            onCancel: { _ in XCTFail("Direct save must not be cancelled") },
+            onCompletion: { succeeded, urls in
+                XCTAssertTrue(succeeded)
+                completedURLs = urls
+                completed.fulfill()
+            }
+        ))
+        let staging = try XCTUnwrap(stagingDirectory)
+        let stagingURLs = files.map { staging.appendingPathComponent($0.name) }
+        try Data("first".utf8).write(to: stagingURLs[0])
+        try Data("second".utf8).write(to: stagingURLs[1])
+
+        XCTAssertTrue(controller.fulfillRemoteFiles(generation: 48, urls: stagingURLs))
+        await fulfillment(of: [completed], timeout: 1)
+        XCTAssertEqual(completedURLs.map(\.lastPathComponent), ["first.txt", "second.txt"])
+        XCTAssertEqual(
+            try Data(contentsOf: targetDirectory.appendingPathComponent("first.txt")),
+            Data("first".utf8)
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: targetDirectory.appendingPathComponent("second.txt")),
+            Data("second".utf8)
+        )
+    }
+
+    func testCoordinatedPlaceholderReadStartsOneBatchAndWaitsForMaterialization() async throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        let controller = RemoteClipboardController(
+            pasteboard: pasteboard,
+            deferRemoteFileOffersWhileApplicationActive: false
+        )
+        defer { controller.stop() }
+        let requested = expectation(description: "batch requested once")
+        let coordinatedReadFinished = DispatchSemaphore(value: 0)
+        var requestCount = 0
+        var offeredURLs: [URL] = []
+
+        XCTAssertTrue(controller.offerRemoteFiles(
+            generation: 43,
+            files: [
+                ClipboardRemoteFileDescriptor(name: "first.txt", size: 5, modificationDate: nil),
+                ClipboardRemoteFileDescriptor(name: "second.txt", size: 6, modificationDate: nil),
+            ],
+            onRequest: { generation, directory in
+                requestCount += 1
+                XCTAssertEqual(directory, offeredURLs[0].deletingLastPathComponent())
+                requested.fulfill()
+            },
+            onCancel: { _ in XCTFail("Promise must not be cancelled") }
+        ))
+        let items = try XCTUnwrap(pasteboard.pasteboardItems)
+        XCTAssertEqual(items.count, 2)
+        offeredURLs = try items.map { item in
+            _ = item.data(forType: .fileURL)
+            return try XCTUnwrap(URL(
+                string: try XCTUnwrap(item.string(forType: .fileURL))
+            ))
+        }
+        XCTAssertEqual(requestCount, 0)
+
+        let firstURL = offeredURLs[0]
+        DispatchQueue.global(qos: .userInitiated).async {
+            let coordinator = NSFileCoordinator()
+            var error: NSError?
+            coordinator.coordinate(
+                readingItemAt: firstURL,
+                options: .withoutChanges,
+                error: &error
+            ) { _ in
+                coordinatedReadFinished.signal()
+            }
+        }
+        await fulfillment(of: [requested], timeout: 1)
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertEqual(coordinatedReadFinished.wait(timeout: .now() + 0.05), .timedOut)
+        try Data("first".utf8).write(to: offeredURLs[0])
+        try Data("second".utf8).write(to: offeredURLs[1])
+        XCTAssertTrue(controller.fulfillRemoteFiles(generation: 43, urls: offeredURLs))
+        XCTAssertEqual(coordinatedReadFinished.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(try Data(contentsOf: offeredURLs[0]), Data("first".utf8))
+    }
+
+    func testCancellingMaterializationRemovesPlaceholderBeforeReleasingReader() async throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        let controller = RemoteClipboardController(
+            pasteboard: pasteboard,
+            deferRemoteFileOffersWhileApplicationActive: false
+        )
+        defer { controller.stop() }
+        let requested = expectation(description: "coordinated read requested materialization")
+        let coordinatedReadFinished = DispatchSemaphore(value: 0)
+        let observedMissingFile = DispatchSemaphore(value: 0)
+
+        XCTAssertTrue(controller.offerRemoteFiles(
+            generation: 46,
+            files: [ClipboardRemoteFileDescriptor(
+                name: "cancelled.txt",
+                size: 9,
+                modificationDate: nil
+            )],
+            onRequest: { _, _ in requested.fulfill() },
+            onCancel: { _ in }
+        ))
+        let item = try XCTUnwrap(pasteboard.pasteboardItems?.first)
+        _ = item.data(forType: .fileURL)
+        let url = try XCTUnwrap(URL(
+            string: try XCTUnwrap(item.string(forType: .fileURL))
+        ))
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let coordinator = NSFileCoordinator()
+            var error: NSError?
+            coordinator.coordinate(
+                readingItemAt: url,
+                options: .withoutChanges,
+                error: &error
+            ) { coordinatedURL in
+                if !FileManager.default.fileExists(atPath: coordinatedURL.path) {
+                    observedMissingFile.signal()
+                }
+                coordinatedReadFinished.signal()
+            }
+        }
+        await fulfillment(of: [requested], timeout: 1)
+        XCTAssertEqual(coordinatedReadFinished.wait(timeout: .now() + 0.05), .timedOut)
+
+        controller.cancelRemoteFileOffer(generation: 46)
+
+        XCTAssertEqual(coordinatedReadFinished.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(observedMissingFile.wait(timeout: .now()), .success)
+    }
+
+    func testRemoteFilePromiseIsPublishedAfterApplicationResignsActive() async throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        let notificationCenter = NotificationCenter()
+        let controller = RemoteClipboardController(
+            pasteboard: pasteboard,
+            notificationCenter: notificationCenter,
+            isApplicationActive: { true }
+        )
+        controller.start()
+        defer { controller.stop() }
+        let initialChangeCount = pasteboard.changeCount
+
+        XCTAssertTrue(controller.offerRemoteFiles(
+            generation: 44,
+            files: [ClipboardRemoteFileDescriptor(
+                name: "deferred.txt",
+                size: 8,
+                modificationDate: nil
+            )],
+            onRequest: { _, _ in XCTFail("Listing promised types must not request file data") },
+            onCancel: { _ in }
+        ))
+        XCTAssertEqual(pasteboard.changeCount, initialChangeCount)
+
+        notificationCenter.post(name: NSApplication.didResignActiveNotification, object: nil)
+        await Task.yield()
+
+        XCTAssertGreaterThan(pasteboard.changeCount, initialChangeCount)
+        XCTAssertEqual(pasteboard.pasteboardItems?.count, 1)
+        XCTAssertTrue(pasteboard.types?.contains(.fileURL) == true)
     }
 
     func testFixedResolutionViewportIsCappedByAvailableScreenSize() {

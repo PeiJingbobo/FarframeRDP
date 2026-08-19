@@ -395,7 +395,8 @@ static UINT FFRClipboardSendCapabilities(FFRSession *session)
         .version = CB_CAPS_VERSION_2,
         .generalFlags = CB_USE_LONG_FORMAT_NAMES |
             (session->clipboardFilesAllowed
-                 ? (CB_STREAM_FILECLIP_ENABLED | CB_FILECLIP_NO_FILE_PATHS)
+                 ? (CB_STREAM_FILECLIP_ENABLED | CB_FILECLIP_NO_FILE_PATHS |
+                    CB_CAN_LOCK_CLIPDATA)
                  : 0U),
     };
     CLIPRDR_CAPABILITIES capabilities = {
@@ -403,6 +404,30 @@ static UINT FFRClipboardSendCapabilities(FFRSession *session)
         .capabilitySets = (CLIPRDR_CAPABILITY_SET *)&generalCapabilitySet,
     };
     return session->clipboard->ClientCapabilities(session->clipboard, &capabilities);
+}
+
+static UINT FFRClipboardServerCapabilities(
+    CliprdrClientContext *context,
+    const CLIPRDR_CAPABILITIES *capabilities)
+{
+    if (context == NULL || context->custom == NULL || capabilities == NULL ||
+        capabilities->cCapabilitiesSets == 0U || capabilities->capabilitySets == NULL) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    const CLIPRDR_GENERAL_CAPABILITY_SET *general =
+        (const CLIPRDR_GENERAL_CAPABILITY_SET *)capabilities->capabilitySets;
+    if (general->capabilitySetType != CB_CAPSTYPE_GENERAL ||
+        general->capabilitySetLength < CB_CAPSTYPE_GENERAL_LEN) {
+        return ERROR_INVALID_DATA;
+    }
+    FFRSession *session = (FFRSession *)context->custom;
+    if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
+        return ERROR_INTERNAL_ERROR;
+    }
+    session->remoteClipboardLockSupported = session->clipboardFilesAllowed &&
+        (general->generalFlags & CB_CAN_LOCK_CLIPDATA) != 0U;
+    pthread_mutex_unlock(&session->clipboardMutex);
+    return CHANNEL_RC_OK;
 }
 
 static UINT FFRClipboardSendFormatListResponse(FFRSession *session, bool success)
@@ -772,7 +797,9 @@ static UINT FFRClipboardServerFormatList(CliprdrClientContext *context,
         session->remoteClipboardGeneration = 1U;
     }
     session->clipboardRequestPending = false;
-    session->remoteFileRequestPending = false;
+    if (!session->remoteClipboardLocked) {
+        session->remoteFileRequestPending = false;
+    }
     const uint64_t generation = session->remoteClipboardGeneration;
     pthread_mutex_unlock(&session->clipboardMutex);
 
@@ -941,11 +968,18 @@ bool FFRSendClipboardFileRequest(FFRSession *session,
     if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
         return false;
     }
-    if (generation == 0U || generation != session->remoteClipboardGeneration ||
+    const bool currentGeneration = generation == session->remoteClipboardGeneration ||
+        (session->remoteClipboardLocked &&
+         generation == session->lockedRemoteClipboardGeneration);
+    if (generation == 0U || !currentGeneration ||
         session->remoteFileRequestPending) {
         pthread_mutex_unlock(&session->clipboardMutex);
         return false;
     }
+    const bool haveClipDataId = session->remoteClipboardLocked &&
+        session->lockedRemoteClipboardGeneration == generation;
+    const uint32_t clipDataId = haveClipDataId
+        ? session->remoteClipboardClipDataId : 0U;
     session->remoteFileRequestPending = true;
     session->pendingRemoteFileGeneration = generation;
     session->pendingRemoteFileStreamId = streamId;
@@ -966,7 +1000,8 @@ bool FFRSendClipboardFileRequest(FFRSession *session,
         .nPositionHigh = (uint32_t)(offset >> 32U),
         .cbRequested = kind == FFR_CLIPBOARD_FILE_REQUEST_SIZE
             ? (uint32_t)sizeof(uint64_t) : requestedBytes,
-        .haveClipDataId = FALSE,
+        .haveClipDataId = haveClipDataId ? TRUE : FALSE,
+        .clipDataId = clipDataId,
     };
     if (session->clipboard->ClientFileContentsRequest(session->clipboard, &request) ==
         CHANNEL_RC_OK) {
@@ -977,6 +1012,79 @@ bool FFRSendClipboardFileRequest(FFRSession *session,
         pthread_mutex_unlock(&session->clipboardMutex);
     }
     return false;
+}
+
+bool FFRSendClipboardLock(FFRSession *session, uint64_t generation)
+{
+    if (session == NULL || session->clipboard == NULL ||
+        session->clipboard->ClientLockClipboardData == NULL) {
+        return false;
+    }
+    if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
+        return false;
+    }
+    if (!session->remoteClipboardLockSupported || generation == 0U ||
+        generation != session->remoteClipboardGeneration ||
+        session->remoteClipboardLocked) {
+        pthread_mutex_unlock(&session->clipboardMutex);
+        return false;
+    }
+    uint32_t clipDataId = (uint32_t)generation ^ (uint32_t)(generation >> 32U);
+    if (clipDataId == 0U) {
+        clipDataId = 1U;
+    }
+    pthread_mutex_unlock(&session->clipboardMutex);
+    const CLIPRDR_LOCK_CLIPBOARD_DATA request = {
+        .common = { .msgType = CB_LOCK_CLIPDATA },
+        .clipDataId = clipDataId,
+    };
+    if (session->clipboard->ClientLockClipboardData(session->clipboard, &request) !=
+        CHANNEL_RC_OK) {
+        return false;
+    }
+    if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
+        return false;
+    }
+    session->remoteClipboardLocked = true;
+    session->lockedRemoteClipboardGeneration = generation;
+    session->remoteClipboardClipDataId = clipDataId;
+    pthread_mutex_unlock(&session->clipboardMutex);
+    return true;
+}
+
+bool FFRSendClipboardUnlock(FFRSession *session, uint64_t generation)
+{
+    if (session == NULL || session->clipboard == NULL ||
+        session->clipboard->ClientUnlockClipboardData == NULL) {
+        return false;
+    }
+    if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
+        return false;
+    }
+    if (!session->remoteClipboardLocked ||
+        session->lockedRemoteClipboardGeneration != generation) {
+        pthread_mutex_unlock(&session->clipboardMutex);
+        return true;
+    }
+    const uint32_t clipDataId = session->remoteClipboardClipDataId;
+    pthread_mutex_unlock(&session->clipboardMutex);
+    const CLIPRDR_UNLOCK_CLIPBOARD_DATA request = {
+        .common = { .msgType = CB_UNLOCK_CLIPDATA },
+        .clipDataId = clipDataId,
+    };
+    if (session->clipboard->ClientUnlockClipboardData(session->clipboard, &request) !=
+        CHANNEL_RC_OK) {
+        return false;
+    }
+    if (pthread_mutex_lock(&session->clipboardMutex) == 0) {
+        if (session->lockedRemoteClipboardGeneration == generation) {
+            session->remoteClipboardLocked = false;
+            session->lockedRemoteClipboardGeneration = 0U;
+            session->remoteClipboardClipDataId = 0U;
+        }
+        pthread_mutex_unlock(&session->clipboardMutex);
+    }
+    return true;
 }
 
 static UINT FFRClipboardServerFileContentsRequest(
@@ -1083,7 +1191,9 @@ static UINT FFRClipboardServerFileContentsResponse(
     const FFRClipboardFileRequestKind kind = session->pendingRemoteFileKind;
     const uint32_t requestedBytes = session->pendingRemoteFileRequestedBytes;
     session->remoteFileRequestPending = false;
-    const bool current = generation == session->remoteClipboardGeneration;
+    const bool current = generation == session->remoteClipboardGeneration ||
+        (session->remoteClipboardLocked &&
+         generation == session->lockedRemoteClipboardGeneration);
     pthread_mutex_unlock(&session->clipboardMutex);
     const bool success = current &&
         (fileContentsResponse->common.msgFlags & CB_RESPONSE_FAIL) == 0U &&
@@ -1122,6 +1232,10 @@ void FFRClearClipboardState(FFRSession *session)
         session->remoteClipboardGeneration = 0U;
         session->clipboardRequestPending = false;
         session->remoteFileRequestPending = false;
+        session->remoteClipboardLockSupported = false;
+        session->remoteClipboardLocked = false;
+        session->lockedRemoteClipboardGeneration = 0U;
+        session->remoteClipboardClipDataId = 0U;
         for (size_t index = 0U; index < FFR_MAX_CLIPBOARD_FILE_REQUESTS; index += 1U) {
             free(session->localFileRequests[index].responseBytes);
             memset(&session->localFileRequests[index], 0,
@@ -1164,6 +1278,7 @@ static void FFROnChannelConnected(void *context, const ChannelConnectedEventArgs
         session->clipboard = (CliprdrClientContext *)event->pInterface;
         if (session->clipboard != NULL) {
             session->clipboard->custom = session;
+            session->clipboard->ServerCapabilities = FFRClipboardServerCapabilities;
             session->clipboard->MonitorReady = FFRClipboardMonitorReady;
             session->clipboard->ServerFormatList = FFRClipboardServerFormatList;
             session->clipboard->ServerFormatListResponse = FFRClipboardServerFormatListResponse;
@@ -1212,6 +1327,7 @@ static void FFROnChannelDisconnected(void *context, const ChannelDisconnectedEve
     if (session != NULL && strcmp(event->name, CLIPRDR_SVC_CHANNEL_NAME) == 0) {
         if (session->clipboard != NULL) {
             session->clipboard->custom = NULL;
+            session->clipboard->ServerCapabilities = NULL;
             session->clipboard->MonitorReady = NULL;
             session->clipboard->ServerFormatList = NULL;
             session->clipboard->ServerFormatListResponse = NULL;

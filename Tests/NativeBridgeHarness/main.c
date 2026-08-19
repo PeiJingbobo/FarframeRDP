@@ -278,6 +278,22 @@ int main(void)
                FFR_QUEUED_INPUT_CLIPBOARD_FILE_REQUEST);
         session->inputQueueHead = 0U;
         session->inputQueueCount = 0U;
+        assert(FFRSessionLockRemoteClipboard(session, 5U) ==
+               FFR_RESULT_INVALID_STATE);
+        session->remoteClipboardLockSupported = true;
+        assert(FFRSessionLockRemoteClipboard(session, 5U) == FFR_RESULT_OK);
+        assert(session->inputQueueCount == 1U);
+        assert(session->inputQueue[session->inputQueueHead].type ==
+               FFR_QUEUED_INPUT_CLIPBOARD_LOCK);
+        assert(session->inputQueue[session->inputQueueHead].clipboardGeneration == 5U);
+        session->inputQueueHead = 0U;
+        session->inputQueueCount = 0U;
+        assert(FFRSessionUnlockRemoteClipboard(session, 5U) == FFR_RESULT_OK);
+        assert(session->inputQueueCount == 1U);
+        assert(session->inputQueue[session->inputQueueHead].type ==
+               FFR_QUEUED_INPUT_CLIPBOARD_UNLOCK);
+        session->inputQueueHead = 0U;
+        session->inputQueueCount = 0U;
         assert(FFRSessionSendScanCode(session, 0x1EU, true, false) == FFR_RESULT_OK);
         assert(session->inputQueueCount == 1U);
         session->inputQueueHead = 0U;

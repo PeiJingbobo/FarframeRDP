@@ -26,6 +26,211 @@ private struct UserNotice: Identifiable {
     let message: String
 }
 
+@MainActor
+final class ClipboardFileTransferConfirmationPresenter: ObservableObject {
+    static let timeout: TimeInterval = 30
+    static let suppressPromptIdentifier = NSUserInterfaceItemIdentifier(
+        "FarframeClipboardSuppressSessionPrompt"
+    )
+    static let directSaveIdentifier = NSUserInterfaceItemIdentifier(
+        "FarframeClipboardDirectSave"
+    )
+    private static let directSaveResponse = NSApplication.ModalResponse(rawValue: 2_001)
+
+    private var activeAlert: NSAlert?
+    private var activePanel: NSSavePanel?
+    private var timeoutTimer: Timer?
+    private var timedOut = false
+    private var externallyCancelled = false
+
+    static func makeAlert(
+        for approval: ClipboardFileTransferApproval,
+        directSaveTarget: AnyObject? = nil,
+        directSaveAction: Selector? = nil,
+        suppressFurtherPrompts: Bool = false
+    ) -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = approval.direction == .macToWindows
+            ? "允许 mac 向 Windows 传输文件？"
+            : "允许从 Windows接收文件？"
+        let size = ByteCountFormatter.string(
+            fromByteCount: Int64(clamping: approval.totalBytes),
+            countStyle: .file
+        )
+        alert.informativeText = "本次将传输 \(approval.fileCount) 个普通文件，共 \(size)。"
+        alert.addButton(withTitle: "确认复制")
+        alert.addButton(withTitle: "取消")
+        if approval.direction == .windowsToMac {
+            alert.showsSuppressionButton = true
+            let suppressButton = alert.suppressionButton
+            suppressButton?.title = "本次不再询问"
+            suppressButton?.identifier = suppressPromptIdentifier
+            suppressButton?.state = suppressFurtherPrompts ? .on : .off
+
+            let directSaveButton = NSButton(
+                title: "直接保存",
+                target: directSaveTarget,
+                action: directSaveAction
+            )
+            directSaveButton.identifier = directSaveIdentifier
+            directSaveButton.isBordered = false
+            directSaveButton.contentTintColor = .linkColor
+            directSaveButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            directSaveButton.setButtonType(.momentaryPushIn)
+            directSaveButton.sizeToFit()
+            alert.accessoryView = directSaveButton
+        }
+        return alert
+    }
+
+    func present(
+        approval: ClipboardFileTransferApproval,
+        completion: @escaping @MainActor (ClipboardFileTransferConfirmationDecision) -> Void
+    ) {
+        guard activeAlert == nil, activePanel == nil else {
+            completion(.cancel)
+            return
+        }
+
+        let previousApplication = NSWorkspace.shared.frontmostApplication
+        externallyCancelled = false
+        var suppressFurtherPrompts = false
+        var decision: ClipboardFileTransferConfirmationDecision?
+
+        NSApp.activate()
+        while decision == nil, !externallyCancelled {
+            let alert = Self.makeAlert(
+                for: approval,
+                directSaveTarget: self,
+                directSaveAction: #selector(requestDirectSave),
+                suppressFurtherPrompts: suppressFurtherPrompts
+            )
+            activeAlert = alert
+            timedOut = false
+
+            let window = alert.window
+            window.level = .modalPanel
+            window.collectionBehavior.formUnion([.moveToActiveSpace, .fullScreenAuxiliary])
+
+            let timer = Timer(timeInterval: Self.timeout, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.activeAlert === alert else { return }
+                    self.timedOut = true
+                    NSApp.abortModal()
+                }
+            }
+            timeoutTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+
+            window.center()
+            window.orderFrontRegardless()
+            let response = alert.runModal()
+            suppressFurtherPrompts = Self.suppressButton(in: alert)?.state == .on
+
+            timeoutTimer?.invalidate()
+            timeoutTimer = nil
+            activeAlert = nil
+            window.orderOut(nil)
+
+            if externallyCancelled || timedOut {
+                decision = .cancel
+            } else if response == .alertFirstButtonReturn {
+                decision = .confirmCopy(suppressFurtherPrompts: suppressFurtherPrompts)
+            } else if response == Self.directSaveResponse {
+                if let destination = chooseDirectSaveDestination(for: approval) {
+                    decision = .directSave(
+                        destination,
+                        suppressFurtherPrompts: suppressFurtherPrompts
+                    )
+                }
+            } else {
+                decision = .cancel
+            }
+        }
+
+        if let previousApplication,
+           previousApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            _ = previousApplication.activate(options: [.activateAllWindows])
+        }
+        completion(decision ?? .cancel)
+    }
+
+    func cancel() {
+        guard activeAlert != nil || activePanel != nil else { return }
+        externallyCancelled = true
+        timedOut = true
+        timeoutTimer?.invalidate()
+        activePanel?.cancel(nil)
+        NSApp.abortModal()
+    }
+
+    @objc private func requestDirectSave() {
+        NSApp.stopModal(withCode: Self.directSaveResponse)
+    }
+
+    private static func suppressButton(in alert: NSAlert) -> NSButton? {
+        alert.suppressionButton
+    }
+
+    private func chooseDirectSaveDestination(
+        for approval: ClipboardFileTransferApproval
+    ) -> ClipboardDirectSaveDestination? {
+        guard approval.direction == .windowsToMac,
+              approval.fileNames.count == approval.fileCount,
+              !approval.fileNames.isEmpty else { return nil }
+
+        if approval.fileNames.count == 1 {
+            let panel = NSSavePanel()
+            panel.title = "直接保存来自 Windows 的文件"
+            panel.prompt = "保存"
+            panel.canCreateDirectories = true
+            panel.nameFieldStringValue = approval.fileNames[0]
+            panel.directoryURL = FileManager.default.urls(
+                for: .downloadsDirectory,
+                in: .userDomainMask
+            ).first
+            activePanel = panel
+            defer { activePanel = nil }
+            guard panel.runModal() == .OK, !externallyCancelled, let url = panel.url else {
+                return nil
+            }
+            return .file(url)
+        }
+
+        let panel = NSOpenPanel()
+        panel.title = "选择保存来自 Windows 的文件的位置"
+        panel.prompt = "选择文件夹"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = FileManager.default.urls(
+            for: .downloadsDirectory,
+            in: .userDomainMask
+        ).first
+        activePanel = panel
+        defer { activePanel = nil }
+        guard panel.runModal() == .OK,
+              !externallyCancelled,
+              let directory = panel.url else { return nil }
+        let hasCollision = approval.fileNames.contains {
+            FileManager.default.fileExists(
+                atPath: directory.appendingPathComponent($0).path
+            )
+        }
+        guard !hasCollision else {
+            let warning = NSAlert()
+            warning.alertStyle = .warning
+            warning.messageText = "所选文件夹包含同名文件"
+            warning.informativeText = "请选择其他文件夹后重试直接保存。"
+            warning.addButton(withTitle: "好")
+            warning.runModal()
+            return nil
+        }
+        return .directory(directory)
+    }
+}
+
 private struct EnhancedCaptureSynchronizationModifier: ViewModifier {
     @ObservedObject var permission: EnhancedCapturePermissionModel
     let manager: RemoteSessionWindowManager
@@ -75,6 +280,8 @@ struct ConnectionLibraryView: View {
     @StateObject private var remoteWindowManager = RemoteSessionWindowManager()
     @StateObject private var sessionCoordinator = SessionCoordinator()
     @StateObject private var clipboardController = RemoteClipboardController()
+    @StateObject private var clipboardConfirmationPresenter =
+        ClipboardFileTransferConfirmationPresenter()
     @StateObject private var libraryController: ProfileLibraryController
 
     @AppStorage(ApplicationPreferenceKeys.automaticHostStatusChecks) private var automaticHostStatusChecks = true
@@ -414,30 +621,92 @@ struct ConnectionLibraryView: View {
         sessionCoordinator.localClipboardContentProvider = {
             clipboardController.currentContent()
         }
-        sessionCoordinator.onClipboardFilesReceived = { urls in
-            clipboardController.applyRemoteFiles(urls)
+        sessionCoordinator.onClipboardFilesOffered = { generation, files in
+            let published = clipboardController.offerRemoteFiles(
+                generation: generation,
+                files: files,
+                onRequest: { requestedGeneration, destinationDirectory in
+                    sessionCoordinator.requestRemoteClipboardFiles(
+                        generation: requestedGeneration,
+                        destinationDirectory: destinationDirectory
+                    )
+                },
+                onCancel: { cancelledGeneration in
+                    sessionCoordinator.cancelRemoteClipboardFiles(
+                        generation: cancelledGeneration
+                    )
+                }
+            )
+            if !published {
+                sessionCoordinator.cancelRemoteClipboardFiles(generation: generation)
+            }
+        }
+        sessionCoordinator.onClipboardFilesDirectSaveRequested = {
+            generation,
+            files,
+            destination in
+            let started = clipboardController.saveRemoteFiles(
+                generation: generation,
+                files: files,
+                destination: destination,
+                onRequest: { requestedGeneration, stagingDirectory in
+                    sessionCoordinator.requestRemoteClipboardFiles(
+                        generation: requestedGeneration,
+                        destinationDirectory: stagingDirectory
+                    )
+                },
+                onCancel: { cancelledGeneration in
+                    sessionCoordinator.cancelRemoteClipboardFiles(
+                        generation: cancelledGeneration
+                    )
+                },
+                onCompletion: { succeeded, urls in
+                    if succeeded {
+                        NSWorkspace.shared.activateFileViewerSelecting(urls)
+                    } else {
+                        showNotice(
+                            title: "无法保存文件",
+                            message: "所选位置不可用或文件已发生变化，请重新复制后再试。"
+                        )
+                    }
+                }
+            )
+            if !started {
+                sessionCoordinator.cancelRemoteClipboardFiles(generation: generation)
+                showNotice(
+                    title: "无法保存文件",
+                    message: "无法使用所选保存位置，请选择其他位置后重试。"
+                )
+            }
+        }
+        sessionCoordinator.onClipboardFilesReceived = { generation, urls in
+            guard clipboardController.fulfillRemoteFiles(
+                generation: generation,
+                urls: urls
+            ) else {
+                if let directory = urls.first?.deletingLastPathComponent(),
+                   urls.allSatisfy({ $0.deletingLastPathComponent() == directory }),
+                   directory.standardizedFileURL.deletingLastPathComponent() ==
+                    FileManager.default.temporaryDirectory
+                        .appendingPathComponent("FarframeRDP-Clipboard", isDirectory: true)
+                        .standardizedFileURL {
+                    try? FileManager.default.removeItem(at: directory)
+                }
+                return
+            }
             remoteWindowManager.updateClipboardFileTransfer(progress: nil)
         }
+        sessionCoordinator.onClipboardFilesFailed = { generation in
+            clipboardController.cancelRemoteFileOffer(generation: generation)
+        }
         sessionCoordinator.onClipboardFileTransferConfirmation = { approval, completion in
-            let alert = NSAlert()
-            alert.alertStyle = .informational
-            alert.messageText = approval.direction == .macToWindows
-                ? "允许向 Windows 传输文件？"
-                : "允许从 Windows 接收文件？"
-            let size = ByteCountFormatter.string(
-                fromByteCount: Int64(clamping: approval.totalBytes),
-                countStyle: .file
+            clipboardConfirmationPresenter.present(
+                approval: approval,
+                completion: completion
             )
-            alert.informativeText = "本次将传输 \(approval.fileCount) 个普通文件，共 \(size)。不会传输源路径。"
-            alert.addButton(withTitle: "允许")
-            alert.addButton(withTitle: "拒绝")
-            if let window = NSApp.keyWindow {
-                alert.beginSheetModal(for: window) { response in
-                    completion(response == .alertFirstButtonReturn)
-                }
-            } else {
-                completion(alert.runModal() == .alertFirstButtonReturn)
-            }
+        }
+        sessionCoordinator.onClipboardFileTransferConfirmationCancellation = {
+            clipboardConfirmationPresenter.cancel()
         }
         sessionCoordinator.onDesktopSizeChange = { size in
             remoteWindowManager.announceDesktopSize(size)
@@ -460,6 +729,7 @@ struct ConnectionLibraryView: View {
     }
 
     private func tearDownSession() {
+        clipboardConfirmationPresenter.cancel()
         remoteWindowManager.onWindowClosed = nil
         remoteWindowManager.onInput = nil
         remoteWindowManager.onViewportResize = nil
@@ -470,8 +740,12 @@ struct ConnectionLibraryView: View {
         sessionCoordinator.onFrameUpdate = nil
         sessionCoordinator.onCursorUpdate = nil
         sessionCoordinator.onClipboardContentReceived = nil
+        sessionCoordinator.onClipboardFilesOffered = nil
+        sessionCoordinator.onClipboardFilesDirectSaveRequested = nil
         sessionCoordinator.onClipboardFilesReceived = nil
+        sessionCoordinator.onClipboardFilesFailed = nil
         sessionCoordinator.onClipboardFileTransferConfirmation = nil
+        sessionCoordinator.onClipboardFileTransferConfirmationCancellation = nil
         sessionCoordinator.localClipboardContentProvider = nil
         clipboardController.stop()
         pendingConnection?.clearPassword()

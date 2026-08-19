@@ -37,7 +37,9 @@ typedef enum FFRQueuedInputType {
     FFR_QUEUED_INPUT_CLIPBOARD_OFFER = 9,
     FFR_QUEUED_INPUT_CLIPBOARD_REQUEST = 10,
     FFR_QUEUED_INPUT_CLIPBOARD_FILE_RESPONSE = 11,
-    FFR_QUEUED_INPUT_CLIPBOARD_FILE_REQUEST = 12
+    FFR_QUEUED_INPUT_CLIPBOARD_FILE_REQUEST = 12,
+    FFR_QUEUED_INPUT_CLIPBOARD_LOCK = 13,
+    FFR_QUEUED_INPUT_CLIPBOARD_UNLOCK = 14
 } FFRQueuedInputType;
 
 enum { FFR_MAX_MONITOR_LAYOUTS = 16 };
@@ -142,6 +144,10 @@ struct FFRSession {
     bool clipboardLocalToRemote;
     bool clipboardRemoteToLocal;
     bool clipboardReady;
+    bool remoteClipboardLockSupported;
+    bool remoteClipboardLocked;
+    uint64_t lockedRemoteClipboardGeneration;
+    uint32_t remoteClipboardClipDataId;
     uint64_t localClipboardGeneration;
     FFRStoredClipboardPayload localClipboardPayloads[FFR_MAX_CLIPBOARD_FORMATS];
     size_t localClipboardPayloadCount;
@@ -207,6 +213,8 @@ bool FFRSendClipboardFileRequest(FFRSession *session,
                                  FFRClipboardFileRequestKind kind,
                                  uint64_t offset,
                                  uint32_t requestedBytes);
+bool FFRSendClipboardLock(FFRSession *session, uint64_t generation);
+bool FFRSendClipboardUnlock(FFRSession *session, uint64_t generation);
 void FFRClearClipboardState(FFRSession *session);
 size_t FFRClipboardUTF16Length(const BYTE *data, UINT32 byteLength);
 bool FFRClipboardFormatAllowed(const FFRSession *session,

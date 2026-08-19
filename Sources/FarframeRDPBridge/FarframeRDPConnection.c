@@ -795,6 +795,39 @@ FFRResult FFRSessionRequestRemoteFileContents(FFRSession *session,
     return FFREnqueueInput(session, &event, 1U, false);
 }
 
+FFRResult FFRSessionLockRemoteClipboard(FFRSession *session, uint64_t generation)
+{
+    if (session == NULL || generation == 0U) {
+        return FFR_RESULT_INVALID_ARGUMENT;
+    }
+    if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
+        return FFR_RESULT_INVALID_STATE;
+    }
+    const bool supported = session->remoteClipboardLockSupported;
+    const bool current = generation == session->remoteClipboardGeneration;
+    pthread_mutex_unlock(&session->clipboardMutex);
+    if (!supported || !current) {
+        return FFR_RESULT_INVALID_STATE;
+    }
+    const FFRQueuedInput event = {
+        .type = FFR_QUEUED_INPUT_CLIPBOARD_LOCK,
+        .clipboardGeneration = generation,
+    };
+    return FFREnqueueInput(session, &event, 1U, false);
+}
+
+FFRResult FFRSessionUnlockRemoteClipboard(FFRSession *session, uint64_t generation)
+{
+    if (session == NULL || generation == 0U) {
+        return FFR_RESULT_INVALID_ARGUMENT;
+    }
+    const FFRQueuedInput event = {
+        .type = FFR_QUEUED_INPUT_CLIPBOARD_UNLOCK,
+        .clipboardGeneration = generation,
+    };
+    return FFREnqueueInput(session, &event, 1U, false);
+}
+
 static uint16_t FFRPointerButtonBit(FFRPointerButton button)
 {
     return (uint16_t)(1U << ((unsigned int)button - 1U));
@@ -930,6 +963,10 @@ static bool FFRProcessInputEvent(FFRSession *session, const FFRQueuedInput *even
                                            event->fileRequestKind,
                                            event->fileOffset,
                                            event->fileRequestedBytes);
+    case FFR_QUEUED_INPUT_CLIPBOARD_LOCK:
+        return FFRSendClipboardLock(session, event->clipboardGeneration);
+    case FFR_QUEUED_INPUT_CLIPBOARD_UNLOCK:
+        return FFRSendClipboardUnlock(session, event->clipboardGeneration);
     default:
         return false;
     }
