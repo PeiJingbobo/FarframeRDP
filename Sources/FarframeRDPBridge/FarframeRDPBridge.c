@@ -49,6 +49,10 @@ enum {
     FFR_MAX_DESKTOP_DIMENSION = 16384,
     FFR_MAX_DESKTOP_BUFFER_BYTES = 256 * 1024 * 1024,
     FFR_MAX_CLIPBOARD_TEXT_BYTES = 1024 * 1024,
+    FFR_MAX_CLIPBOARD_RICH_TEXT_BYTES = 8 * 1024 * 1024,
+    FFR_MAX_CLIPBOARD_IMAGE_BYTES = 32 * 1024 * 1024,
+    FFR_MAX_CLIPBOARD_FILE_LIST_BYTES = 128 * 1024,
+    FFR_MAX_CLIPBOARD_FORMAT_NAME_BYTES = 256,
     FFR_DEFAULT_DISPLAY_SCALE_FACTOR = 100
 };
 
@@ -389,7 +393,10 @@ static UINT FFRClipboardSendCapabilities(FFRSession *session)
         .capabilitySetType = CB_CAPSTYPE_GENERAL,
         .capabilitySetLength = CB_CAPSTYPE_GENERAL_LEN,
         .version = CB_CAPS_VERSION_2,
-        .generalFlags = CB_USE_LONG_FORMAT_NAMES,
+        .generalFlags = CB_USE_LONG_FORMAT_NAMES |
+            (session->clipboardFilesAllowed
+                 ? (CB_STREAM_FILECLIP_ENABLED | CB_FILECLIP_NO_FILE_PATHS)
+                 : 0U),
     };
     CLIPRDR_CAPABILITIES capabilities = {
         .cCapabilitiesSets = 1,
@@ -413,20 +420,177 @@ static UINT FFRClipboardSendFormatListResponse(FFRSession *session, bool success
     return session->clipboard->ClientFormatListResponse(session->clipboard, &response);
 }
 
-static UINT FFRClipboardRequestRemoteText(FFRSession *session)
+static size_t FFRClipboardMaximumPayloadSize(FFRClipboardFormatKind format)
+{
+    switch (format) {
+    case FFR_CLIPBOARD_FORMAT_UNICODE_TEXT:
+        return FFR_MAX_CLIPBOARD_TEXT_BYTES;
+    case FFR_CLIPBOARD_FORMAT_HTML:
+    case FFR_CLIPBOARD_FORMAT_RTF:
+        return FFR_MAX_CLIPBOARD_RICH_TEXT_BYTES;
+    case FFR_CLIPBOARD_FORMAT_DIB:
+    case FFR_CLIPBOARD_FORMAT_DIBV5:
+    case FFR_CLIPBOARD_FORMAT_PNG:
+        return FFR_MAX_CLIPBOARD_IMAGE_BYTES;
+    case FFR_CLIPBOARD_FORMAT_FILE_LIST:
+        return FFR_MAX_CLIPBOARD_FILE_LIST_BYTES;
+    default:
+        return 0U;
+    }
+}
+
+bool FFRClipboardFormatAllowed(const FFRSession *session,
+                               FFRClipboardFormatKind format,
+                               bool localToRemote)
+{
+    if (session == NULL || !session->clipboardEnabled ||
+        (localToRemote && !session->clipboardLocalToRemote) ||
+        (!localToRemote && !session->clipboardRemoteToLocal)) {
+        return false;
+    }
+    switch (format) {
+    case FFR_CLIPBOARD_FORMAT_UNICODE_TEXT:
+        return session->clipboardTextAllowed;
+    case FFR_CLIPBOARD_FORMAT_HTML:
+    case FFR_CLIPBOARD_FORMAT_RTF:
+        return session->clipboardFormattedTextAllowed;
+    case FFR_CLIPBOARD_FORMAT_DIB:
+    case FFR_CLIPBOARD_FORMAT_DIBV5:
+    case FFR_CLIPBOARD_FORMAT_PNG:
+        return session->clipboardImagesAllowed;
+    case FFR_CLIPBOARD_FORMAT_FILE_LIST:
+        return session->clipboardFilesAllowed;
+    default:
+        return false;
+    }
+}
+
+static bool FFRClipboardLocalFormat(FFRClipboardFormatKind kind,
+                                    uint32_t *formatId,
+                                    const char **formatName)
+{
+    if (formatId == NULL || formatName == NULL) {
+        return false;
+    }
+    *formatName = NULL;
+    switch (kind) {
+    case FFR_CLIPBOARD_FORMAT_UNICODE_TEXT:
+        *formatId = CF_UNICODETEXT;
+        return true;
+    case FFR_CLIPBOARD_FORMAT_HTML:
+        *formatId = 0xC100U;
+        *formatName = "HTML Format";
+        return true;
+    case FFR_CLIPBOARD_FORMAT_RTF:
+        *formatId = 0xC101U;
+        *formatName = "Rich Text Format";
+        return true;
+    case FFR_CLIPBOARD_FORMAT_DIB:
+        *formatId = CF_DIB;
+        return true;
+    case FFR_CLIPBOARD_FORMAT_DIBV5:
+        *formatId = CF_DIBV5;
+        return true;
+    case FFR_CLIPBOARD_FORMAT_PNG:
+        *formatId = 0xC103U;
+        *formatName = "PNG";
+        return true;
+    case FFR_CLIPBOARD_FORMAT_FILE_LIST:
+        *formatId = 0xC102U;
+        *formatName = "FileGroupDescriptorW";
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool FFRClipboardRemoteFormat(const CLIPRDR_FORMAT *format,
+                              FFRClipboardFormatKind *kind)
+{
+    if (format == NULL || kind == NULL) {
+        return false;
+    }
+    if (format->formatName != NULL) {
+        const size_t length = strnlen(format->formatName,
+                                      FFR_MAX_CLIPBOARD_FORMAT_NAME_BYTES + 1U);
+        if (length == 0U || length > FFR_MAX_CLIPBOARD_FORMAT_NAME_BYTES) {
+            return false;
+        }
+        if (strcmp(format->formatName, "HTML Format") == 0) {
+            *kind = FFR_CLIPBOARD_FORMAT_HTML;
+            return true;
+        }
+        if (strcmp(format->formatName, "Rich Text Format") == 0) {
+            *kind = FFR_CLIPBOARD_FORMAT_RTF;
+            return true;
+        }
+        if (strcmp(format->formatName, "FileGroupDescriptorW") == 0) {
+            *kind = FFR_CLIPBOARD_FORMAT_FILE_LIST;
+            return true;
+        }
+        if (strcmp(format->formatName, "PNG") == 0) {
+            *kind = FFR_CLIPBOARD_FORMAT_PNG;
+            return true;
+        }
+        return false;
+    }
+    switch (format->formatId) {
+    case CF_UNICODETEXT:
+        *kind = FFR_CLIPBOARD_FORMAT_UNICODE_TEXT;
+        return true;
+    case CF_DIB:
+        *kind = FFR_CLIPBOARD_FORMAT_DIB;
+        return true;
+    case CF_DIBV5:
+        *kind = FFR_CLIPBOARD_FORMAT_DIBV5;
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool FFRSendClipboardDataRequest(FFRSession *session,
+                                 uint64_t generation,
+                                 uint32_t remoteFormatId,
+                                 FFRClipboardFormatKind format)
 {
     if (session == NULL || session->clipboard == NULL ||
-        session->clipboard->ClientFormatDataRequest == NULL) {
-        return ERROR_INVALID_PARAMETER;
+        session->clipboard->ClientFormatDataRequest == NULL ||
+        FFRClipboardMaximumPayloadSize(format) == 0U ||
+        !FFRClipboardFormatAllowed(session, format, false)) {
+        return false;
     }
+    if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
+        return false;
+    }
+    if (generation == 0U || generation != session->remoteClipboardGeneration ||
+        session->clipboardRequestPending) {
+        pthread_mutex_unlock(&session->clipboardMutex);
+        return false;
+    }
+    session->clipboardRequestPending = true;
+    session->pendingClipboardGeneration = generation;
+    session->pendingClipboardFormatId = remoteFormatId;
+    session->pendingClipboardFormat = format;
+    pthread_mutex_unlock(&session->clipboardMutex);
+
     CLIPRDR_FORMAT_DATA_REQUEST request = {
         .common = {
             .msgType = CB_FORMAT_DATA_REQUEST,
         },
-        .requestedFormatId = CF_UNICODETEXT,
+        .requestedFormatId = remoteFormatId,
     };
-    session->clipboard->lastRequestedFormatId = CF_UNICODETEXT;
-    return session->clipboard->ClientFormatDataRequest(session->clipboard, &request);
+    session->clipboard->lastRequestedFormatId = remoteFormatId;
+    if (session->clipboard->ClientFormatDataRequest(session->clipboard, &request) ==
+        CHANNEL_RC_OK) {
+        return true;
+    }
+
+    if (pthread_mutex_lock(&session->clipboardMutex) == 0) {
+        session->clipboardRequestPending = false;
+        pthread_mutex_unlock(&session->clipboardMutex);
+    }
+    return false;
 }
 
 static UINT FFRClipboardSendFormatDataFail(FFRSession *session)
@@ -444,31 +608,34 @@ static UINT FFRClipboardSendFormatDataFail(FFRSession *session)
     return session->clipboard->ClientFormatDataResponse(session->clipboard, &response);
 }
 
-static UINT FFRClipboardSendLocalTextResponse(FFRSession *session)
+static UINT FFRClipboardSendLocalDataResponse(FFRSession *session, uint32_t formatId)
 {
     if (session == NULL || session->clipboard == NULL ||
         session->clipboard->ClientFormatDataResponse == NULL) {
         return ERROR_INVALID_PARAMETER;
     }
 
-    uint16_t *snapshot = NULL;
+    uint8_t *snapshot = NULL;
     size_t snapshotLength = 0U;
     if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
         return ERROR_INTERNAL_ERROR;
     }
-    if (session->localClipboardUtf16 != NULL &&
-        session->localClipboardLength <= (SIZE_MAX / sizeof(uint16_t)) - 1U) {
-        snapshotLength = session->localClipboardLength + 1U;
-        snapshot = malloc(snapshotLength * sizeof(uint16_t));
-        if (snapshot != NULL) {
-            memcpy(snapshot, session->localClipboardUtf16,
-                   snapshotLength * sizeof(uint16_t));
+    for (size_t index = 0U; index < session->localClipboardPayloadCount; index += 1U) {
+        const FFRStoredClipboardPayload *payload = &session->localClipboardPayloads[index];
+        if (payload->formatId == formatId &&
+            FFRClipboardFormatAllowed(session, payload->kind, true) &&
+            payload->bytes != NULL && payload->length > 0U) {
+            snapshot = malloc(payload->length);
+            if (snapshot != NULL) {
+                memcpy(snapshot, payload->bytes, payload->length);
+                snapshotLength = payload->length;
+            }
+            break;
         }
     }
     pthread_mutex_unlock(&session->clipboardMutex);
 
-    if (snapshot == NULL || snapshotLength > UINT32_MAX / sizeof(uint16_t) ||
-        snapshotLength * sizeof(uint16_t) > FFR_MAX_CLIPBOARD_TEXT_BYTES) {
+    if (snapshot == NULL || snapshotLength > UINT32_MAX) {
         free(snapshot);
         return FFRClipboardSendFormatDataFail(session);
     }
@@ -477,9 +644,9 @@ static UINT FFRClipboardSendLocalTextResponse(FFRSession *session)
         .common = {
             .msgType = CB_FORMAT_DATA_RESPONSE,
             .msgFlags = CB_RESPONSE_OK,
-            .dataLen = (UINT32)(snapshotLength * sizeof(uint16_t)),
+            .dataLen = (UINT32)snapshotLength,
         },
-        .requestedFormatData = (const BYTE *)snapshot,
+        .requestedFormatData = snapshot,
     };
     const UINT result = session->clipboard->ClientFormatDataResponse(session->clipboard,
                                                                      &response);
@@ -489,34 +656,40 @@ static UINT FFRClipboardSendLocalTextResponse(FFRSession *session)
 
 bool FFRSendClipboardFormatList(FFRSession *session)
 {
-    if (session == NULL || !session->clipboardTextEnabled || !session->clipboardReady ||
+    if (session == NULL || !session->clipboardEnabled ||
+        !session->clipboardLocalToRemote || !session->clipboardReady ||
         session->clipboard == NULL || session->clipboard->ClientFormatList == NULL) {
         return true;
     }
 
-    const CLIPRDR_FORMAT unicodeTextFormat = {
-        .formatId = CF_UNICODETEXT,
-        .formatName = NULL,
-    };
-    const CLIPRDR_FORMAT *formats = NULL;
+    CLIPRDR_FORMAT formats[FFR_MAX_CLIPBOARD_FORMATS] = { 0 };
     UINT32 numFormats = 0U;
 
     if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
         return false;
     }
-    if (session->localClipboardUtf16 != NULL) {
-        formats = &unicodeTextFormat;
-        numFormats = 1U;
+    for (size_t index = 0U; index < session->localClipboardPayloadCount; index += 1U) {
+        uint32_t formatId = 0U;
+        const char *formatName = NULL;
+        if (FFRClipboardFormatAllowed(session,
+                                      session->localClipboardPayloads[index].kind,
+                                      true) &&
+            FFRClipboardLocalFormat(session->localClipboardPayloads[index].kind,
+                                    &formatId, &formatName)) {
+            formats[numFormats].formatId = formatId;
+            formats[numFormats].formatName = (char *)formatName;
+            numFormats += 1U;
+        }
     }
+    pthread_mutex_unlock(&session->clipboardMutex);
     const CLIPRDR_FORMAT_LIST formatList = {
         .common = {
             .msgType = CB_FORMAT_LIST,
         },
         .numFormats = numFormats,
-        .formats = (CLIPRDR_FORMAT *)formats,
+        .formats = formats,
     };
     const UINT result = session->clipboard->ClientFormatList(session->clipboard, &formatList);
-    pthread_mutex_unlock(&session->clipboardMutex);
     return result == CHANNEL_RC_OK;
 }
 
@@ -561,17 +734,55 @@ static UINT FFRClipboardServerFormatList(CliprdrClientContext *context,
         return ERROR_INVALID_PARAMETER;
     }
     FFRSession *session = (FFRSession *)context->custom;
-    const UINT response = FFRClipboardSendFormatListResponse(session,
-                                                            session->clipboardTextEnabled);
-    if (response != CHANNEL_RC_OK || !session->clipboardTextEnabled) {
+    const bool validCount = formatList->numFormats <= FFR_MAX_REMOTE_CLIPBOARD_FORMATS;
+    const UINT response = FFRClipboardSendFormatListResponse(
+        session, session->clipboardEnabled && session->clipboardRemoteToLocal && validCount);
+    if (response != CHANNEL_RC_OK || !session->clipboardEnabled ||
+        !session->clipboardRemoteToLocal || !validCount) {
         return response;
     }
 
+    FFRClipboardFormatDescriptor formats[FFR_MAX_CLIPBOARD_FORMATS] = { 0 };
+    size_t formatCount = 0U;
     for (UINT32 index = 0U; index < formatList->numFormats; index += 1U) {
-        if (formatList->formats[index].formatId == CF_UNICODETEXT) {
-            return FFRClipboardRequestRemoteText(session);
+        FFRClipboardFormatKind kind = 0;
+        if (!FFRClipboardRemoteFormat(&formatList->formats[index], &kind) ||
+            !FFRClipboardFormatAllowed(session, kind, false)) {
+            continue;
+        }
+        bool duplicate = false;
+        for (size_t existing = 0U; existing < formatCount; existing += 1U) {
+            if (formats[existing].kind == kind) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate && formatCount < FFR_MAX_CLIPBOARD_FORMATS) {
+            formats[formatCount].kind = kind;
+            formats[formatCount].formatId = formatList->formats[index].formatId;
+            formatCount += 1U;
         }
     }
+
+    if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
+        return ERROR_INTERNAL_ERROR;
+    }
+    session->remoteClipboardGeneration += 1U;
+    if (session->remoteClipboardGeneration == 0U) {
+        session->remoteClipboardGeneration = 1U;
+    }
+    session->clipboardRequestPending = false;
+    session->remoteFileRequestPending = false;
+    const uint64_t generation = session->remoteClipboardGeneration;
+    pthread_mutex_unlock(&session->clipboardMutex);
+
+    const FFRClipboardEvent event = {
+        .type = FFR_CLIPBOARD_EVENT_REMOTE_OFFER,
+        .generation = generation,
+        .formats = formats,
+        .formatCount = formatCount,
+    };
+    FFREmitClipboardEvent(session, &event);
     return CHANNEL_RC_OK;
 }
 
@@ -592,11 +803,10 @@ static UINT FFRClipboardServerFormatDataRequest(
         return ERROR_INVALID_PARAMETER;
     }
     FFRSession *session = (FFRSession *)context->custom;
-    if (!session->clipboardTextEnabled ||
-        formatDataRequest->requestedFormatId != CF_UNICODETEXT) {
+    if (!session->clipboardEnabled || !session->clipboardLocalToRemote) {
         return FFRClipboardSendFormatDataFail(session);
     }
-    return FFRClipboardSendLocalTextResponse(session);
+    return FFRClipboardSendLocalDataResponse(session, formatDataRequest->requestedFormatId);
 }
 
 static UINT FFRClipboardServerFormatDataResponse(
@@ -607,15 +817,43 @@ static UINT FFRClipboardServerFormatDataResponse(
         return ERROR_INVALID_PARAMETER;
     }
     FFRSession *session = (FFRSession *)context->custom;
-    if (!session->clipboardTextEnabled || session->clipboard == NULL ||
-        session->clipboard->lastRequestedFormatId != CF_UNICODETEXT ||
-        (formatDataResponse->common.msgFlags & CB_RESPONSE_FAIL) != 0U ||
-        formatDataResponse->common.dataLen > FFR_MAX_CLIPBOARD_TEXT_BYTES) {
+    if (!session->clipboardEnabled || !session->clipboardRemoteToLocal ||
+        session->clipboard == NULL) {
         return CHANNEL_RC_OK;
     }
 
+    if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
+        return ERROR_INTERNAL_ERROR;
+    }
+    if (!session->clipboardRequestPending) {
+        pthread_mutex_unlock(&session->clipboardMutex);
+        return CHANNEL_RC_OK;
+    }
+    const uint64_t generation = session->pendingClipboardGeneration;
+    const FFRClipboardFormatKind format = session->pendingClipboardFormat;
+    const uint32_t formatId = session->pendingClipboardFormatId;
+    session->clipboardRequestPending = false;
+    const bool current = generation == session->remoteClipboardGeneration;
+    pthread_mutex_unlock(&session->clipboardMutex);
+
+    const bool success = current && session->clipboard->lastRequestedFormatId == formatId &&
+        (formatDataResponse->common.msgFlags & CB_RESPONSE_FAIL) == 0U &&
+        formatDataResponse->common.dataLen > 0U &&
+        formatDataResponse->common.dataLen <= FFRClipboardMaximumPayloadSize(format);
+    const FFRClipboardEvent dataEvent = {
+        .type = FFR_CLIPBOARD_EVENT_REMOTE_DATA,
+        .length = success ? formatDataResponse->common.dataLen : 0U,
+        .generation = generation,
+        .format = format,
+        .bytes = success ? formatDataResponse->requestedFormatData : NULL,
+    };
+    FFREmitClipboardEvent(session, &dataEvent);
+
+    if (!success || format != FFR_CLIPBOARD_FORMAT_UNICODE_TEXT) {
+        return CHANNEL_RC_OK;
+    }
     const size_t length = FFRClipboardUTF16Length(formatDataResponse->requestedFormatData,
-                                                 formatDataResponse->common.dataLen);
+                                                  formatDataResponse->common.dataLen);
     if (length == SIZE_MAX) {
         return CHANNEL_RC_OK;
     }
@@ -628,12 +866,200 @@ static UINT FFRClipboardServerFormatDataResponse(
     return CHANNEL_RC_OK;
 }
 
+static UINT FFRClipboardSendImmediateFileFailure(FFRSession *session, uint32_t streamId)
+{
+    if (session == NULL || session->clipboard == NULL ||
+        session->clipboard->ClientFileContentsResponse == NULL) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    const CLIPRDR_FILE_CONTENTS_RESPONSE response = {
+        .common = { .msgType = CB_FILECONTENTS_RESPONSE, .msgFlags = CB_RESPONSE_FAIL },
+        .streamId = streamId,
+    };
+    return session->clipboard->ClientFileContentsResponse(session->clipboard, &response);
+}
+
+bool FFRSendClipboardFileResponse(FFRSession *session, uint64_t requestId)
+{
+    if (session == NULL || requestId == 0U || session->clipboard == NULL ||
+        session->clipboard->ClientFileContentsResponse == NULL) {
+        return false;
+    }
+    FFRClipboardLocalFileRequest snapshot = { 0 };
+    if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
+        return false;
+    }
+    for (size_t index = 0U; index < FFR_MAX_CLIPBOARD_FILE_REQUESTS; index += 1U) {
+        FFRClipboardLocalFileRequest *request = &session->localFileRequests[index];
+        if (request->active && request->requestId == requestId && request->responseReady) {
+            snapshot = *request;
+            memset(request, 0, sizeof(*request));
+            break;
+        }
+    }
+    const bool current = snapshot.requestId != 0U &&
+        snapshot.generation == session->localClipboardGeneration &&
+        session->clipboardLocalToRemote && session->clipboardFilesAllowed;
+    pthread_mutex_unlock(&session->clipboardMutex);
+    if (snapshot.requestId == 0U) {
+        return false;
+    }
+    const bool success = current && snapshot.success;
+    const CLIPRDR_FILE_CONTENTS_RESPONSE response = {
+        .common = {
+            .msgType = CB_FILECONTENTS_RESPONSE,
+            .msgFlags = success ? CB_RESPONSE_OK : CB_RESPONSE_FAIL,
+        },
+        .streamId = snapshot.streamId,
+        .cbRequested = success ? (UINT32)snapshot.responseLength : 0U,
+        .requestedData = success ? snapshot.responseBytes : NULL,
+    };
+    const UINT result = session->clipboard->ClientFileContentsResponse(
+        session->clipboard, &response);
+    free(snapshot.responseBytes);
+    return result == CHANNEL_RC_OK;
+}
+
+bool FFRSendClipboardFileRequest(FFRSession *session,
+                                 uint64_t generation,
+                                 uint32_t streamId,
+                                 uint32_t listIndex,
+                                 FFRClipboardFileRequestKind kind,
+                                 uint64_t offset,
+                                 uint32_t requestedBytes)
+{
+    if (session == NULL || session->clipboard == NULL ||
+        session->clipboard->ClientFileContentsRequest == NULL || streamId == 0U ||
+        !FFRClipboardFormatAllowed(session, FFR_CLIPBOARD_FORMAT_FILE_LIST, false) ||
+        (kind != FFR_CLIPBOARD_FILE_REQUEST_SIZE &&
+         kind != FFR_CLIPBOARD_FILE_REQUEST_RANGE) ||
+        (kind == FFR_CLIPBOARD_FILE_REQUEST_RANGE &&
+         (requestedBytes == 0U || requestedBytes > FFR_MAX_CLIPBOARD_FILE_RANGE_BYTES ||
+          UINT64_MAX - offset < requestedBytes))) {
+        return false;
+    }
+    if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
+        return false;
+    }
+    if (generation == 0U || generation != session->remoteClipboardGeneration ||
+        session->remoteFileRequestPending) {
+        pthread_mutex_unlock(&session->clipboardMutex);
+        return false;
+    }
+    session->remoteFileRequestPending = true;
+    session->pendingRemoteFileGeneration = generation;
+    session->pendingRemoteFileStreamId = streamId;
+    session->pendingRemoteFileListIndex = listIndex;
+    session->pendingRemoteFileKind = kind;
+    session->pendingRemoteFileOffset = offset;
+    session->pendingRemoteFileRequestedBytes = kind == FFR_CLIPBOARD_FILE_REQUEST_SIZE
+        ? (uint32_t)sizeof(uint64_t) : requestedBytes;
+    pthread_mutex_unlock(&session->clipboardMutex);
+
+    const CLIPRDR_FILE_CONTENTS_REQUEST request = {
+        .common = { .msgType = CB_FILECONTENTS_REQUEST },
+        .streamId = streamId,
+        .listIndex = listIndex,
+        .dwFlags = kind == FFR_CLIPBOARD_FILE_REQUEST_SIZE
+            ? FILECONTENTS_SIZE : FILECONTENTS_RANGE,
+        .nPositionLow = (uint32_t)offset,
+        .nPositionHigh = (uint32_t)(offset >> 32U),
+        .cbRequested = kind == FFR_CLIPBOARD_FILE_REQUEST_SIZE
+            ? (uint32_t)sizeof(uint64_t) : requestedBytes,
+        .haveClipDataId = FALSE,
+    };
+    if (session->clipboard->ClientFileContentsRequest(session->clipboard, &request) ==
+        CHANNEL_RC_OK) {
+        return true;
+    }
+    if (pthread_mutex_lock(&session->clipboardMutex) == 0) {
+        session->remoteFileRequestPending = false;
+        pthread_mutex_unlock(&session->clipboardMutex);
+    }
+    return false;
+}
+
 static UINT FFRClipboardServerFileContentsRequest(
     CliprdrClientContext *context,
     const CLIPRDR_FILE_CONTENTS_REQUEST *fileContentsRequest)
 {
-    (void)context;
-    (void)fileContentsRequest;
+    if (context == NULL || context->custom == NULL || fileContentsRequest == NULL) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    FFRSession *session = (FFRSession *)context->custom;
+    const FFRClipboardFileRequestKind kind =
+        fileContentsRequest->dwFlags == FILECONTENTS_SIZE
+            ? FFR_CLIPBOARD_FILE_REQUEST_SIZE
+            : FFR_CLIPBOARD_FILE_REQUEST_RANGE;
+    const uint64_t offset = ((uint64_t)fileContentsRequest->nPositionHigh << 32U) |
+        fileContentsRequest->nPositionLow;
+    if (!FFRClipboardFormatAllowed(session, FFR_CLIPBOARD_FORMAT_FILE_LIST, true) ||
+        (fileContentsRequest->dwFlags != FILECONTENTS_SIZE &&
+         fileContentsRequest->dwFlags != FILECONTENTS_RANGE) ||
+        (kind == FFR_CLIPBOARD_FILE_REQUEST_RANGE &&
+         (fileContentsRequest->cbRequested == 0U ||
+          fileContentsRequest->cbRequested > FFR_MAX_CLIPBOARD_FILE_RANGE_BYTES ||
+          UINT64_MAX - offset < fileContentsRequest->cbRequested))) {
+        return FFRClipboardSendImmediateFileFailure(session, fileContentsRequest->streamId);
+    }
+
+    FFRClipboardLocalFileRequest *request = NULL;
+    uint32_t fileCount = 0U;
+    if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
+        return ERROR_INTERNAL_ERROR;
+    }
+    for (size_t index = 0U; index < session->localClipboardPayloadCount; index += 1U) {
+        const FFRStoredClipboardPayload *payload = &session->localClipboardPayloads[index];
+        if (payload->kind == FFR_CLIPBOARD_FORMAT_FILE_LIST && payload->length >= 4U) {
+            fileCount = (uint32_t)payload->bytes[0] |
+                ((uint32_t)payload->bytes[1] << 8U) |
+                ((uint32_t)payload->bytes[2] << 16U) |
+                ((uint32_t)payload->bytes[3] << 24U);
+            break;
+        }
+    }
+    if (fileContentsRequest->listIndex < fileCount) {
+        for (size_t index = 0U; index < FFR_MAX_CLIPBOARD_FILE_REQUESTS; index += 1U) {
+            if (!session->localFileRequests[index].active) {
+                request = &session->localFileRequests[index];
+                break;
+            }
+        }
+    }
+    if (request == NULL) {
+        pthread_mutex_unlock(&session->clipboardMutex);
+        return FFRClipboardSendImmediateFileFailure(session, fileContentsRequest->streamId);
+    }
+    session->nextFileRequestId += 1U;
+    if (session->nextFileRequestId == 0U) {
+        session->nextFileRequestId = 1U;
+    }
+    *request = (FFRClipboardLocalFileRequest) {
+        .active = true,
+        .requestId = session->nextFileRequestId,
+        .generation = session->localClipboardGeneration,
+        .streamId = fileContentsRequest->streamId,
+        .listIndex = fileContentsRequest->listIndex,
+        .kind = kind,
+        .offset = offset,
+        .requestedBytes = kind == FFR_CLIPBOARD_FILE_REQUEST_SIZE
+            ? (uint32_t)sizeof(uint64_t) : fileContentsRequest->cbRequested,
+    };
+    const uint64_t requestId = request->requestId;
+    const uint64_t generation = request->generation;
+    pthread_mutex_unlock(&session->clipboardMutex);
+    const FFRClipboardEvent event = {
+        .type = FFR_CLIPBOARD_EVENT_LOCAL_FILE_REQUEST,
+        .generation = generation,
+        .fileRequestId = requestId,
+        .streamId = fileContentsRequest->streamId,
+        .listIndex = fileContentsRequest->listIndex,
+        .fileRequestKind = kind,
+        .fileOffset = offset,
+        .requestedBytes = kind == FFR_CLIPBOARD_FILE_REQUEST_SIZE
+            ? (uint32_t)sizeof(uint64_t) : fileContentsRequest->cbRequested,
+    };
+    FFREmitClipboardEvent(session, &event);
     return CHANNEL_RC_OK;
 }
 
@@ -641,8 +1067,42 @@ static UINT FFRClipboardServerFileContentsResponse(
     CliprdrClientContext *context,
     const CLIPRDR_FILE_CONTENTS_RESPONSE *fileContentsResponse)
 {
-    (void)context;
-    (void)fileContentsResponse;
+    if (context == NULL || context->custom == NULL || fileContentsResponse == NULL) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    FFRSession *session = (FFRSession *)context->custom;
+    if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
+        return ERROR_INTERNAL_ERROR;
+    }
+    if (!session->remoteFileRequestPending ||
+        session->pendingRemoteFileStreamId != fileContentsResponse->streamId) {
+        pthread_mutex_unlock(&session->clipboardMutex);
+        return CHANNEL_RC_OK;
+    }
+    const uint64_t generation = session->pendingRemoteFileGeneration;
+    const FFRClipboardFileRequestKind kind = session->pendingRemoteFileKind;
+    const uint32_t requestedBytes = session->pendingRemoteFileRequestedBytes;
+    session->remoteFileRequestPending = false;
+    const bool current = generation == session->remoteClipboardGeneration;
+    pthread_mutex_unlock(&session->clipboardMutex);
+    const bool success = current &&
+        (fileContentsResponse->common.msgFlags & CB_RESPONSE_FAIL) == 0U &&
+        fileContentsResponse->cbRequested <= requestedBytes &&
+        (kind != FFR_CLIPBOARD_FILE_REQUEST_SIZE ||
+         fileContentsResponse->cbRequested == sizeof(uint64_t)) &&
+        (fileContentsResponse->cbRequested == 0U ||
+         fileContentsResponse->requestedData != NULL);
+    const FFRClipboardEvent event = {
+        .type = FFR_CLIPBOARD_EVENT_REMOTE_FILE_DATA,
+        .length = success ? fileContentsResponse->cbRequested : 0U,
+        .generation = generation,
+        .bytes = success ? fileContentsResponse->requestedData : NULL,
+        .streamId = fileContentsResponse->streamId,
+        .fileRequestKind = kind,
+        .requestedBytes = requestedBytes,
+        .success = success,
+    };
+    FFREmitClipboardEvent(session, &event);
     return CHANNEL_RC_OK;
 }
 
@@ -652,9 +1112,21 @@ void FFRClearClipboardState(FFRSession *session)
         return;
     }
     if (pthread_mutex_lock(&session->clipboardMutex) == 0) {
-        free(session->localClipboardUtf16);
-        session->localClipboardUtf16 = NULL;
-        session->localClipboardLength = 0U;
+        for (size_t index = 0U; index < session->localClipboardPayloadCount; index += 1U) {
+            free(session->localClipboardPayloads[index].bytes);
+            memset(&session->localClipboardPayloads[index], 0,
+                   sizeof(session->localClipboardPayloads[index]));
+        }
+        session->localClipboardPayloadCount = 0U;
+        session->localClipboardGeneration = 0U;
+        session->remoteClipboardGeneration = 0U;
+        session->clipboardRequestPending = false;
+        session->remoteFileRequestPending = false;
+        for (size_t index = 0U; index < FFR_MAX_CLIPBOARD_FILE_REQUESTS; index += 1U) {
+            free(session->localFileRequests[index].responseBytes);
+            memset(&session->localFileRequests[index], 0,
+                   sizeof(session->localFileRequests[index]));
+        }
         pthread_mutex_unlock(&session->clipboardMutex);
     }
     session->clipboard = NULL;
@@ -991,7 +1463,7 @@ void FFREmitClipboardEvent(FFRSession *session, const FFRClipboardEvent *event)
 
 uint32_t FFRBridgeABIVersion(void)
 {
-    return 11U;
+    return 15U;
 }
 
 const char *FFRFreeRDPVersion(void)

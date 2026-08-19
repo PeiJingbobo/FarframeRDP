@@ -240,6 +240,7 @@ private final class RemoteSessionContainerView: NSView {
     private var toolbarCenterYConstraint: NSLayoutConstraint!
     private var hoverTrackingArea: NSTrackingArea?
     private(set) var isFloatingToolbarVisible = false
+    private var keepsFloatingToolbarVisible = false
 
     override var mouseDownCanMoveWindow: Bool { true }
 
@@ -402,6 +403,10 @@ private final class RemoteSessionContainerView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
+        guard !keepsFloatingToolbarVisible else {
+            setFloatingToolbarVisible(true, animated: true)
+            return
+        }
         let location = convert(event.locationInWindow, from: nil)
         let revealZone = bounds.maxY - RemoteWindowChromeMetrics.revealZoneHeight
         let toolbarHitArea = floatingToolbar.frame.insetBy(dx: 0, dy: -8)
@@ -417,26 +422,35 @@ private final class RemoteSessionContainerView: NSView {
     }
 
     override func mouseExited(with event: NSEvent) {
-        setFloatingToolbarVisible(false, animated: true)
+        setFloatingToolbarVisible(keepsFloatingToolbarVisible, animated: true)
+    }
+
+    func setFloatingToolbarPinned(_ pinned: Bool) {
+        keepsFloatingToolbarVisible = pinned
+        setFloatingToolbarVisible(pinned, animated: true)
     }
 
     func setFloatingToolbarVisible(_ visible: Bool, animated: Bool) {
-        guard visible != isFloatingToolbarVisible || !animated else { return }
-        isFloatingToolbarVisible = visible
-        let targetHeight = visible ? RemoteWindowChromeMetrics.toolbarHeight : 0
+        let effectiveVisibility = visible || keepsFloatingToolbarVisible
+        guard effectiveVisibility != isFloatingToolbarVisible || !animated else { return }
+        isFloatingToolbarVisible = effectiveVisibility
+        let targetHeight = effectiveVisibility ? RemoteWindowChromeMetrics.toolbarHeight : 0
 
         if !animated {
             toolbarHeightConstraint.constant = targetHeight
-            floatingToolbar.alphaValue = visible ? 1 : 0
-            floatingToolbar.isHidden = !visible
-            chromeMaterialView.alphaValue = visible ? 1 : 0
-            setStandardWindowButtonsVisible(visible, alpha: visible ? 1 : 0)
+            floatingToolbar.alphaValue = effectiveVisibility ? 1 : 0
+            floatingToolbar.isHidden = !effectiveVisibility
+            chromeMaterialView.alphaValue = effectiveVisibility ? 1 : 0
+            setStandardWindowButtonsVisible(
+                effectiveVisibility,
+                alpha: effectiveVisibility ? 1 : 0
+            )
             window?.invalidateShadow()
             layoutSubtreeIfNeeded()
             return
         }
 
-        if visible {
+        if effectiveVisibility {
             floatingToolbar.isHidden = false
             setStandardWindowButtonsVisible(true, alpha: 0)
             window?.invalidateShadow()
@@ -445,15 +459,15 @@ private final class RemoteSessionContainerView: NSView {
         toolbarHeightConstraint.constant = targetHeight
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = visible ? 0.2 : 0.14
+            context.duration = effectiveVisibility ? 0.2 : 0.14
             context.timingFunction = CAMediaTimingFunction(
-                name: visible ? .easeOut : .easeIn
+                name: effectiveVisibility ? .easeOut : .easeIn
             )
             context.allowsImplicitAnimation = true
-            floatingToolbar.animator().alphaValue = visible ? 1 : 0
-            chromeMaterialView.animator().alphaValue = visible ? 1 : 0
+            floatingToolbar.animator().alphaValue = effectiveVisibility ? 1 : 0
+            chromeMaterialView.animator().alphaValue = effectiveVisibility ? 1 : 0
             for button in standardWindowButtons {
-                button.animator().alphaValue = visible ? 1 : 0
+                button.animator().alphaValue = effectiveVisibility ? 1 : 0
             }
             layoutSubtreeIfNeeded()
         } completionHandler: { [weak self] in
@@ -560,9 +574,14 @@ final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDele
     private weak var captureToolbarButton: NSButton?
     private weak var resolutionToolbarButton: NSPopUpButton?
     private weak var sessionTitleLabel: NSTextField?
+    private weak var clipboardStatusStack: NSStackView?
+    private weak var clipboardProgressIndicator: NSProgressIndicator?
+    private weak var clipboardProgressLabel: NSTextField?
+    private weak var clipboardCancelButton: NSButton?
     var displayActivationRetryDelay: Duration = .milliseconds(500)
     @Published private(set) var shortcutCaptureStatus: ShortcutCaptureStatus = .inactive
     var onWindowClosed: (@MainActor () -> Void)?
+    var onCancelClipboardFileTransfer: (@MainActor () -> Void)?
     var onInput: (@MainActor (RemoteInputCommand) -> Void)? {
         didSet { remoteCanvas?.onInput = onInput }
     }
@@ -698,6 +717,20 @@ final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDele
 
     var displayedToolbarTitle: String? {
         sessionTitleLabel?.stringValue
+    }
+
+    var clipboardToolbarStatusIsVisible: Bool {
+        clipboardStatusStack?.isHidden == false
+    }
+
+    var clipboardToolbarProgressValue: Double? {
+        clipboardProgressIndicator?.isHidden == false
+            ? clipboardProgressIndicator?.doubleValue
+            : nil
+    }
+
+    var floatingToolbarIsVisible: Bool {
+        remoteContainerView?.isFloatingToolbarVisible == true
     }
 
     var remoteCanvasSize: CGSize? {
@@ -967,6 +1000,34 @@ final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDele
         remoteWindowController?.window?.close()
     }
 
+    func updateClipboardFileTransfer(progress: ClipboardTransferProgress?) {
+        let hasStatus = progress != nil
+        clipboardStatusStack?.isHidden = !hasStatus
+        clipboardProgressIndicator?.isHidden = progress == nil
+        clipboardProgressLabel?.isHidden = progress == nil
+        clipboardCancelButton?.isHidden = !hasStatus
+        if let progress {
+            clipboardProgressIndicator?.minValue = 0
+            clipboardProgressIndicator?.maxValue = Double(max(1, progress.totalBytes))
+            clipboardProgressIndicator?.doubleValue = Double(progress.completedBytes)
+            let direction = progress.direction == .macToWindows
+                ? String(localized: "发送")
+                : String(localized: "接收")
+            let completed = ByteCountFormatter.string(
+                fromByteCount: Int64(clamping: progress.completedBytes),
+                countStyle: .file
+            )
+            let total = ByteCountFormatter.string(
+                fromByteCount: Int64(clamping: progress.totalBytes),
+                countStyle: .file
+            )
+            clipboardProgressLabel?.stringValue = progress.failed
+                ? String(localized: "文件传输失败")
+                : "\(direction) \(completed) / \(total)"
+        }
+        remoteContainerView?.setFloatingToolbarPinned(hasStatus)
+    }
+
     private func makeFloatingToolbar() -> NSView {
         let toolbar = FloatingRemoteToolbarView()
         toolbar.wantsLayer = true
@@ -1006,7 +1067,46 @@ final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDele
         control.widthAnchor.constraint(greaterThanOrEqualToConstant: 116).isActive = true
         resolutionToolbarButton = control
 
-        let actions = NSStackView(views: [button, control])
+        let progressIndicator = NSProgressIndicator()
+        progressIndicator.style = .bar
+        progressIndicator.controlSize = .small
+        progressIndicator.isIndeterminate = false
+        progressIndicator.translatesAutoresizingMaskIntoConstraints = false
+        progressIndicator.widthAnchor.constraint(equalToConstant: 90).isActive = true
+        clipboardProgressIndicator = progressIndicator
+
+        let progressLabel = NSTextField(labelWithString: "")
+        progressLabel.font = .systemFont(ofSize: 10)
+        progressLabel.textColor = .secondaryLabelColor
+        progressLabel.lineBreakMode = .byTruncatingMiddle
+        progressLabel.translatesAutoresizingMaskIntoConstraints = false
+        progressLabel.widthAnchor.constraint(equalToConstant: 118).isActive = true
+        clipboardProgressLabel = progressLabel
+
+        let cancelButton = NSButton(
+            image: NSImage(systemSymbolName: "xmark.circle", accessibilityDescription: nil) ?? NSImage(),
+            target: self,
+            action: #selector(cancelClipboardFileTransfer)
+        )
+        cancelButton.bezelStyle = .texturedRounded
+        cancelButton.controlSize = .small
+        cancelButton.imagePosition = .imageOnly
+        cancelButton.toolTip = String(localized: "取消文件传输")
+        clipboardCancelButton = cancelButton
+
+        let clipboardStatus = NSStackView(
+            views: [progressIndicator, progressLabel, cancelButton]
+        )
+        clipboardStatus.orientation = .horizontal
+        clipboardStatus.alignment = .centerY
+        clipboardStatus.spacing = 5
+        clipboardStatus.isHidden = true
+        progressIndicator.isHidden = true
+        progressLabel.isHidden = true
+        cancelButton.isHidden = true
+        clipboardStatusStack = clipboardStatus
+
+        let actions = NSStackView(views: [clipboardStatus, button, control])
         actions.orientation = .horizontal
         actions.alignment = .centerY
         actions.spacing = 6
@@ -1028,6 +1128,10 @@ final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDele
             displayedStatus: remoteCanvas?.shortcutCaptureStatus ?? shortcutCaptureStatus
         )
         return toolbar
+    }
+
+    @objc private func cancelClipboardFileTransfer() {
+        onCancelClipboardFileTransfer?()
     }
 
     @objc private func resolutionChanged(_ sender: NSPopUpButton) {

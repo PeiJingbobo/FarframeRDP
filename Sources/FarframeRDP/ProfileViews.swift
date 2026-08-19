@@ -480,14 +480,34 @@ struct ProfileEditorView: View {
             ProfileOptionRow(
                 systemImage: "doc.on.clipboard",
                 title: "剪贴板",
-                detail: "双向同步纯文本，最大 1 MiB；不会传输图片、文件或路径。"
+                detail: "按方向同步选定内容。旧配置升级后仍仅启用纯文本；可在每次文件传输前确认。"
             ) {
-                Picker("剪贴板", selection: $draft.redirectOptions.clipboardText) {
-                    Text("关闭").tag(false)
-                    Text("双向纯文本").tag(true)
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("启用", isOn: $draft.redirectOptions.clipboardEnabled)
+
+                    Picker("方向", selection: $draft.redirectOptions.clipboardDirection) {
+                        Text("双向").tag(ClipboardTransferDirection.bidirectional)
+                        Text("仅 Mac → Windows").tag(ClipboardTransferDirection.macToWindows)
+                        Text("仅 Windows → Mac").tag(ClipboardTransferDirection.windowsToMac)
+                    }
+                    .frame(width: 190)
+                    .disabled(!draft.redirectOptions.clipboardEnabled)
+
+                    Toggle("纯文本", isOn: $draft.redirectOptions.clipboardText)
+                        .disabled(!draft.redirectOptions.clipboardEnabled)
+                    Toggle("格式化文本", isOn: $draft.redirectOptions.clipboardFormattedText)
+                        .disabled(!draft.redirectOptions.clipboardEnabled)
+                    Toggle("图片", isOn: $draft.redirectOptions.clipboardImages)
+                        .disabled(!draft.redirectOptions.clipboardEnabled)
+                    Toggle("文件", isOn: $draft.redirectOptions.clipboardFiles)
+                        .disabled(!draft.redirectOptions.clipboardEnabled)
+                    Toggle("每次传输文件前询问", isOn: $draft.redirectOptions.confirmClipboardFiles)
+                        .disabled(
+                            !draft.redirectOptions.clipboardEnabled ||
+                                !draft.redirectOptions.clipboardFiles
+                        )
                 }
-                .labelsHidden()
-                .frame(width: 150)
+                .frame(width: 250, alignment: .leading)
             }
 
             Divider()

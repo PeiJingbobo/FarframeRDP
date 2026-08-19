@@ -34,7 +34,10 @@ typedef enum FFRQueuedInputType {
     FFR_QUEUED_INPUT_SYNCHRONIZE = 6,
     FFR_QUEUED_INPUT_RELEASE_ALL = 7,
     FFR_QUEUED_INPUT_RESIZE = 8,
-    FFR_QUEUED_INPUT_CLIPBOARD_TEXT = 9
+    FFR_QUEUED_INPUT_CLIPBOARD_OFFER = 9,
+    FFR_QUEUED_INPUT_CLIPBOARD_REQUEST = 10,
+    FFR_QUEUED_INPUT_CLIPBOARD_FILE_RESPONSE = 11,
+    FFR_QUEUED_INPUT_CLIPBOARD_FILE_REQUEST = 12
 } FFRQueuedInputType;
 
 enum { FFR_MAX_MONITOR_LAYOUTS = 16 };
@@ -55,7 +58,45 @@ typedef struct FFRQueuedInput {
     uint32_t height;
     FFRMonitorLayout monitors[FFR_MAX_MONITOR_LAYOUTS];
     size_t monitorCount;
+    uint64_t clipboardGeneration;
+    uint32_t clipboardFormatId;
+    FFRClipboardFormatKind clipboardFormat;
+    uint64_t fileRequestId;
+    uint32_t streamId;
+    uint32_t fileListIndex;
+    FFRClipboardFileRequestKind fileRequestKind;
+    uint64_t fileOffset;
+    uint32_t fileRequestedBytes;
 } FFRQueuedInput;
+
+enum {
+    FFR_MAX_CLIPBOARD_FORMATS = 16,
+    FFR_MAX_REMOTE_CLIPBOARD_FORMATS = 64,
+    FFR_MAX_CLIPBOARD_FILE_REQUESTS = 16,
+    FFR_MAX_CLIPBOARD_FILE_RANGE_BYTES = 1024 * 1024
+};
+
+typedef struct FFRStoredClipboardPayload {
+    FFRClipboardFormatKind kind;
+    uint32_t formatId;
+    uint8_t *bytes;
+    size_t length;
+} FFRStoredClipboardPayload;
+
+typedef struct FFRClipboardLocalFileRequest {
+    bool active;
+    bool responseReady;
+    bool success;
+    uint64_t requestId;
+    uint64_t generation;
+    uint32_t streamId;
+    uint32_t listIndex;
+    FFRClipboardFileRequestKind kind;
+    uint64_t offset;
+    uint32_t requestedBytes;
+    uint8_t *responseBytes;
+    size_t responseLength;
+} FFRClipboardLocalFileRequest;
 
 enum { FFR_INPUT_QUEUE_CAPACITY = 512 };
 
@@ -93,10 +134,31 @@ struct FFRSession {
     void *clipboardCallbackContext;
     pthread_mutex_t clipboardMutex;
     CliprdrClientContext *clipboard;
-    bool clipboardTextEnabled;
+    bool clipboardEnabled;
+    bool clipboardTextAllowed;
+    bool clipboardFormattedTextAllowed;
+    bool clipboardImagesAllowed;
+    bool clipboardFilesAllowed;
+    bool clipboardLocalToRemote;
+    bool clipboardRemoteToLocal;
     bool clipboardReady;
-    uint16_t *localClipboardUtf16;
-    size_t localClipboardLength;
+    uint64_t localClipboardGeneration;
+    FFRStoredClipboardPayload localClipboardPayloads[FFR_MAX_CLIPBOARD_FORMATS];
+    size_t localClipboardPayloadCount;
+    uint64_t remoteClipboardGeneration;
+    bool clipboardRequestPending;
+    uint64_t pendingClipboardGeneration;
+    uint32_t pendingClipboardFormatId;
+    FFRClipboardFormatKind pendingClipboardFormat;
+    uint64_t nextFileRequestId;
+    FFRClipboardLocalFileRequest localFileRequests[FFR_MAX_CLIPBOARD_FILE_REQUESTS];
+    bool remoteFileRequestPending;
+    uint64_t pendingRemoteFileGeneration;
+    uint32_t pendingRemoteFileStreamId;
+    uint32_t pendingRemoteFileListIndex;
+    FFRClipboardFileRequestKind pendingRemoteFileKind;
+    uint64_t pendingRemoteFileOffset;
+    uint32_t pendingRemoteFileRequestedBytes;
     DispClientContext *displayControl;
     bool dynamicResolutionEnabled;
     bool displayControlActivated;
@@ -133,7 +195,25 @@ bool FFRValidateCursorGeometry(uint32_t width, uint32_t height,
                               size_t *bufferLength);
 bool FFRSendPendingResize(FFRSession *session);
 bool FFRSendClipboardFormatList(FFRSession *session);
+bool FFRSendClipboardDataRequest(FFRSession *session,
+                                 uint64_t generation,
+                                 uint32_t remoteFormatId,
+                                 FFRClipboardFormatKind format);
+bool FFRSendClipboardFileResponse(FFRSession *session, uint64_t requestId);
+bool FFRSendClipboardFileRequest(FFRSession *session,
+                                 uint64_t generation,
+                                 uint32_t streamId,
+                                 uint32_t listIndex,
+                                 FFRClipboardFileRequestKind kind,
+                                 uint64_t offset,
+                                 uint32_t requestedBytes);
 void FFRClearClipboardState(FFRSession *session);
 size_t FFRClipboardUTF16Length(const BYTE *data, UINT32 byteLength);
+bool FFRClipboardFormatAllowed(const FFRSession *session,
+                               FFRClipboardFormatKind format,
+                               bool localToRemote);
+/// Maps only allowlisted remote formats. Names and payloads remain untrusted.
+bool FFRClipboardRemoteFormat(const CLIPRDR_FORMAT *format,
+                              FFRClipboardFormatKind *kind);
 
 #endif

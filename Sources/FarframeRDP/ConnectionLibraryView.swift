@@ -42,6 +42,18 @@ private struct EnhancedCaptureSynchronizationModifier: ViewModifier {
     }
 }
 
+private struct ClipboardTransferSynchronizationModifier: ViewModifier {
+    @ObservedObject var coordinator: SessionCoordinator
+    let manager: RemoteSessionWindowManager
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: coordinator.clipboardTransferProgress) { _, progress in
+                manager.updateClipboardFileTransfer(progress: progress)
+            }
+    }
+}
+
 private struct PendingConnection {
     var profileID: UUID?
     var draft: ConnectionProfileDraft?
@@ -147,6 +159,10 @@ struct ConnectionLibraryView: View {
             manager: remoteWindowManager,
             userEnabled: enhancedShortcutCapture
         ))
+        .modifier(ClipboardTransferSynchronizationModifier(
+            coordinator: sessionCoordinator,
+            manager: remoteWindowManager
+        ))
         .onChange(of: sessionCoordinator.phase) { _, phase in
             handleSessionPhase(phase)
         }
@@ -184,6 +200,13 @@ struct ConnectionLibraryView: View {
             ZStack {
                 FarframeWindowBackground()
                 detail
+                if let progress = sessionCoordinator.clipboardTransferProgress {
+                    VStack {
+                        Spacer()
+                        clipboardTransferBanner(progress)
+                    }
+                    .padding(20)
+                }
             }
         }
         .navigationTitle("Farframe RDP")
@@ -214,6 +237,35 @@ struct ConnectionLibraryView: View {
                 .help("添加电脑")
             }
         }
+    }
+
+    private func clipboardTransferBanner(_ progress: ClipboardTransferProgress) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: progress.failed ? "exclamationmark.triangle" : "doc.on.clipboard")
+            VStack(alignment: .leading, spacing: 5) {
+                Text(progress.failed ? "剪贴板文件传输失败" : transferTitle(progress.direction))
+                    .font(.callout.weight(.semibold))
+                ProgressView(
+                    value: Double(progress.completedBytes),
+                    total: Double(max(1, progress.totalBytes))
+                )
+                Text("\(progress.fileCount) 个文件 · \(ByteCountFormatter.string(fromByteCount: Int64(clamping: progress.completedBytes), countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: Int64(clamping: progress.totalBytes), countStyle: .file))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 260, alignment: .leading)
+            Button(progress.failed ? "关闭" : "取消") {
+                sessionCoordinator.cancelClipboardFileTransfer()
+            }
+        }
+        .padding(14)
+        .farframeGlassPanel()
+    }
+
+    private func transferTitle(_ direction: ClipboardFileTransferDirection) -> String {
+        direction == .macToWindows
+            ? String(localized: "正在向 Windows 发送剪贴板文件")
+            : String(localized: "正在从 Windows 接收剪贴板文件")
     }
 
     private var sidebar: some View {
@@ -356,8 +408,36 @@ struct ConnectionLibraryView: View {
         remoteWindowManager.onViewportLayout = { layouts in
             sessionCoordinator.requestMonitorLayout(layouts)
         }
-        sessionCoordinator.localClipboardTextProvider = {
-            clipboardController.currentText()
+        remoteWindowManager.onCancelClipboardFileTransfer = {
+            sessionCoordinator.cancelClipboardFileTransfer()
+        }
+        sessionCoordinator.localClipboardContentProvider = {
+            clipboardController.currentContent()
+        }
+        sessionCoordinator.onClipboardFilesReceived = { urls in
+            clipboardController.applyRemoteFiles(urls)
+            remoteWindowManager.updateClipboardFileTransfer(progress: nil)
+        }
+        sessionCoordinator.onClipboardFileTransferConfirmation = { approval, completion in
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = approval.direction == .macToWindows
+                ? "允许向 Windows 传输文件？"
+                : "允许从 Windows 接收文件？"
+            let size = ByteCountFormatter.string(
+                fromByteCount: Int64(clamping: approval.totalBytes),
+                countStyle: .file
+            )
+            alert.informativeText = "本次将传输 \(approval.fileCount) 个普通文件，共 \(size)。不会传输源路径。"
+            alert.addButton(withTitle: "允许")
+            alert.addButton(withTitle: "拒绝")
+            if let window = NSApp.keyWindow {
+                alert.beginSheetModal(for: window) { response in
+                    completion(response == .alertFirstButtonReturn)
+                }
+            } else {
+                completion(alert.runModal() == .alertFirstButtonReturn)
+            }
         }
         sessionCoordinator.onDesktopSizeChange = { size in
             remoteWindowManager.announceDesktopSize(size)
@@ -384,12 +464,15 @@ struct ConnectionLibraryView: View {
         remoteWindowManager.onInput = nil
         remoteWindowManager.onViewportResize = nil
         remoteWindowManager.onViewportLayout = nil
+        remoteWindowManager.onCancelClipboardFileTransfer = nil
         sessionCoordinator.onDesktopSizeChange = nil
         sessionCoordinator.onDynamicResolutionReady = nil
         sessionCoordinator.onFrameUpdate = nil
         sessionCoordinator.onCursorUpdate = nil
-        sessionCoordinator.onClipboardTextReceived = nil
-        sessionCoordinator.localClipboardTextProvider = nil
+        sessionCoordinator.onClipboardContentReceived = nil
+        sessionCoordinator.onClipboardFilesReceived = nil
+        sessionCoordinator.onClipboardFileTransferConfirmation = nil
+        sessionCoordinator.localClipboardContentProvider = nil
         clipboardController.stop()
         pendingConnection?.clearPassword()
         pendingConnection = nil
@@ -461,21 +544,21 @@ struct ConnectionLibraryView: View {
                 passwordToSave: savePassword ? password : nil,
                 certificateFingerprint: nil
             )
-            if result.draft.redirectOptions.clipboardText {
-                clipboardController.onLocalTextChange = { text in
-                    sessionCoordinator.publishClipboardText(text)
+            if result.draft.redirectOptions.clipboardEnabled {
+                clipboardController.onLocalContentChange = { content in
+                    sessionCoordinator.publishClipboardContent(content)
                 }
-                sessionCoordinator.onClipboardTextReceived = { text in
-                    clipboardController.applyRemoteText(text)
+                sessionCoordinator.onClipboardContentReceived = { content in
+                    clipboardController.applyRemoteContent(content)
                 }
-                sessionCoordinator.localClipboardTextProvider = {
-                    clipboardController.currentText()
+                sessionCoordinator.localClipboardContentProvider = {
+                    clipboardController.currentContent()
                 }
                 clipboardController.start()
             } else {
                 clipboardController.stop()
-                sessionCoordinator.onClipboardTextReceived = nil
-                sessionCoordinator.localClipboardTextProvider = nil
+                sessionCoordinator.onClipboardContentReceived = nil
+                sessionCoordinator.localClipboardContentProvider = nil
             }
             sessionCoordinator.connect(
                 endpoint: result.endpoint,

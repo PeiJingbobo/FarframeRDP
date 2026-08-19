@@ -527,28 +527,271 @@ FFRResult FFRSessionPublishClipboardText(FFRSession *session,
         }
     }
 
-    uint16_t *copy = NULL;
-    if (length > 0U) {
-        if (length > (SIZE_MAX / sizeof(uint16_t)) - 1U) {
-            return FFR_RESULT_INVALID_ARGUMENT;
+    uint64_t generation = 1U;
+    if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
+        return FFR_RESULT_INVALID_STATE;
+    }
+    if (session->localClipboardGeneration != UINT64_MAX) {
+        generation = session->localClipboardGeneration + 1U;
+    }
+    pthread_mutex_unlock(&session->clipboardMutex);
+
+    if (length == 0U) {
+        return FFRSessionPublishClipboardOffer(session, generation, NULL, 0U);
+    }
+    if (length > (SIZE_MAX / sizeof(uint16_t)) - 1U) {
+        return FFR_RESULT_INVALID_ARGUMENT;
+    }
+    uint16_t *wire = calloc(length + 1U, sizeof(uint16_t));
+    if (wire == NULL) {
+        return FFR_RESULT_ALLOCATION_FAILED;
+    }
+    memcpy(wire, utf16CodeUnits, length * sizeof(uint16_t));
+    const FFRClipboardPayload payload = {
+        .kind = FFR_CLIPBOARD_FORMAT_UNICODE_TEXT,
+        .bytes = (const uint8_t *)wire,
+        .length = (length + 1U) * sizeof(uint16_t),
+    };
+    const FFRResult result = FFRSessionPublishClipboardOffer(session, generation, &payload, 1U);
+    free(wire);
+    return result;
+}
+
+static size_t FFRClipboardPublishedMaximum(FFRClipboardFormatKind kind)
+{
+    switch (kind) {
+    case FFR_CLIPBOARD_FORMAT_UNICODE_TEXT:
+        return 1024U * 1024U;
+    case FFR_CLIPBOARD_FORMAT_HTML:
+    case FFR_CLIPBOARD_FORMAT_RTF:
+        return 8U * 1024U * 1024U;
+    case FFR_CLIPBOARD_FORMAT_DIB:
+    case FFR_CLIPBOARD_FORMAT_DIBV5:
+    case FFR_CLIPBOARD_FORMAT_PNG:
+        return 32U * 1024U * 1024U;
+    case FFR_CLIPBOARD_FORMAT_FILE_LIST:
+        return 128U * 1024U;
+    default:
+        return 0U;
+    }
+}
+
+static uint32_t FFRClipboardPublishedFormatId(FFRClipboardFormatKind kind)
+{
+    switch (kind) {
+    case FFR_CLIPBOARD_FORMAT_UNICODE_TEXT:
+        return CF_UNICODETEXT;
+    case FFR_CLIPBOARD_FORMAT_HTML:
+        return 0xC100U;
+    case FFR_CLIPBOARD_FORMAT_RTF:
+        return 0xC101U;
+    case FFR_CLIPBOARD_FORMAT_DIB:
+        return CF_DIB;
+    case FFR_CLIPBOARD_FORMAT_DIBV5:
+        return CF_DIBV5;
+    case FFR_CLIPBOARD_FORMAT_PNG:
+        return 0xC103U;
+    case FFR_CLIPBOARD_FORMAT_FILE_LIST:
+        return 0xC102U;
+    default:
+        return 0U;
+    }
+}
+
+FFRResult FFRSessionPublishClipboardOffer(FFRSession *session,
+                                          uint64_t generation,
+                                          const FFRClipboardPayload *payloads,
+                                          size_t payloadCount)
+{
+    if (session == NULL || generation == 0U || payloadCount > FFR_MAX_CLIPBOARD_FORMATS ||
+        (payloadCount > 0U && payloads == NULL)) {
+        return FFR_RESULT_INVALID_ARGUMENT;
+    }
+    if (!atomic_load_explicit(&session->inputEnabled, memory_order_acquire)) {
+        return FFR_RESULT_INVALID_STATE;
+    }
+
+    FFRStoredClipboardPayload copies[FFR_MAX_CLIPBOARD_FORMATS] = { 0 };
+    for (size_t index = 0U; index < payloadCount; index += 1U) {
+        const FFRClipboardPayload *source = &payloads[index];
+        const size_t maximum = FFRClipboardPublishedMaximum(source->kind);
+        const uint32_t formatId = FFRClipboardPublishedFormatId(source->kind);
+        if (maximum == 0U || formatId == 0U || source->bytes == NULL ||
+            source->length == 0U || source->length > maximum || source->length > UINT32_MAX) {
+            goto invalid;
         }
-        copy = calloc(length + 1U, sizeof(uint16_t));
+        for (size_t previous = 0U; previous < index; previous += 1U) {
+            if (copies[previous].kind == source->kind) {
+                goto invalid;
+            }
+        }
+        if (source->kind == FFR_CLIPBOARD_FORMAT_UNICODE_TEXT) {
+            const size_t textLength = FFRClipboardUTF16Length(source->bytes,
+                                                              (UINT32)source->length);
+            if (textLength == SIZE_MAX ||
+                textLength + 1U != source->length / sizeof(uint16_t)) {
+                goto invalid;
+            }
+        }
+        copies[index].bytes = malloc(source->length);
+        if (copies[index].bytes == NULL) {
+            for (size_t cleanup = 0U; cleanup < index; cleanup += 1U) {
+                free(copies[cleanup].bytes);
+            }
+            return FFR_RESULT_ALLOCATION_FAILED;
+        }
+        memcpy(copies[index].bytes, source->bytes, source->length);
+        copies[index].kind = source->kind;
+        copies[index].formatId = formatId;
+        copies[index].length = source->length;
+    }
+
+    if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
+        for (size_t cleanup = 0U; cleanup < payloadCount; cleanup += 1U) {
+            free(copies[cleanup].bytes);
+        }
+        return FFR_RESULT_INVALID_STATE;
+    }
+    if (generation <= session->localClipboardGeneration) {
+        pthread_mutex_unlock(&session->clipboardMutex);
+        for (size_t cleanup = 0U; cleanup < payloadCount; cleanup += 1U) {
+            free(copies[cleanup].bytes);
+        }
+        return FFR_RESULT_INVALID_ARGUMENT;
+    }
+    for (size_t index = 0U; index < session->localClipboardPayloadCount; index += 1U) {
+        free(session->localClipboardPayloads[index].bytes);
+    }
+    memset(session->localClipboardPayloads, 0, sizeof(session->localClipboardPayloads));
+    for (size_t index = 0U; index < FFR_MAX_CLIPBOARD_FILE_REQUESTS; index += 1U) {
+        free(session->localFileRequests[index].responseBytes);
+        memset(&session->localFileRequests[index], 0,
+               sizeof(session->localFileRequests[index]));
+    }
+    memcpy(session->localClipboardPayloads, copies,
+           payloadCount * sizeof(FFRStoredClipboardPayload));
+    session->localClipboardPayloadCount = payloadCount;
+    session->localClipboardGeneration = generation;
+    pthread_mutex_unlock(&session->clipboardMutex);
+
+    const FFRQueuedInput event = { .type = FFR_QUEUED_INPUT_CLIPBOARD_OFFER };
+    return FFREnqueueInput(session, &event, 1U, false);
+
+invalid:
+    for (size_t cleanup = 0U; cleanup < payloadCount; cleanup += 1U) {
+        free(copies[cleanup].bytes);
+    }
+    return FFR_RESULT_INVALID_ARGUMENT;
+}
+
+FFRResult FFRSessionRequestClipboardData(FFRSession *session,
+                                         uint64_t generation,
+                                         uint32_t remoteFormatId,
+                                         FFRClipboardFormatKind format)
+{
+    if (session == NULL || generation == 0U || remoteFormatId == 0U ||
+        FFRClipboardPublishedMaximum(format) == 0U) {
+        return FFR_RESULT_INVALID_ARGUMENT;
+    }
+    const FFRQueuedInput event = {
+        .type = FFR_QUEUED_INPUT_CLIPBOARD_REQUEST,
+        .clipboardGeneration = generation,
+        .clipboardFormatId = remoteFormatId,
+        .clipboardFormat = format,
+    };
+    return FFREnqueueInput(session, &event, 1U, false);
+}
+
+FFRResult FFRSessionRespondLocalFileRequest(FFRSession *session,
+                                            uint64_t fileRequestId,
+                                            bool success,
+                                            const uint8_t *bytes,
+                                            size_t length)
+{
+    if (session == NULL || fileRequestId == 0U || length > UINT32_MAX ||
+        (success && length > 0U && bytes == NULL) || (!success && length != 0U)) {
+        return FFR_RESULT_INVALID_ARGUMENT;
+    }
+    uint8_t *copy = NULL;
+    if (success && length > 0U) {
+        copy = malloc(length);
         if (copy == NULL) {
             return FFR_RESULT_ALLOCATION_FAILED;
         }
-        memcpy(copy, utf16CodeUnits, length * sizeof(uint16_t));
+        memcpy(copy, bytes, length);
     }
-
     if (pthread_mutex_lock(&session->clipboardMutex) != 0) {
         free(copy);
         return FFR_RESULT_INVALID_STATE;
     }
-    free(session->localClipboardUtf16);
-    session->localClipboardUtf16 = copy;
-    session->localClipboardLength = length;
+    FFRClipboardLocalFileRequest *request = NULL;
+    for (size_t index = 0U; index < FFR_MAX_CLIPBOARD_FILE_REQUESTS; index += 1U) {
+        FFRClipboardLocalFileRequest *candidate = &session->localFileRequests[index];
+        if (candidate->active && candidate->requestId == fileRequestId &&
+            !candidate->responseReady) {
+            request = candidate;
+            break;
+        }
+    }
+    const bool validLength = request != NULL && (!success ||
+        (request->kind == FFR_CLIPBOARD_FILE_REQUEST_SIZE
+             ? length == sizeof(uint64_t)
+             : length <= request->requestedBytes &&
+               length <= FFR_MAX_CLIPBOARD_FILE_RANGE_BYTES));
+    if (!validLength) {
+        pthread_mutex_unlock(&session->clipboardMutex);
+        free(copy);
+        return FFR_RESULT_INVALID_ARGUMENT;
+    }
+    request->success = success;
+    request->responseReady = true;
+    request->responseBytes = copy;
+    request->responseLength = success ? length : 0U;
     pthread_mutex_unlock(&session->clipboardMutex);
+    const FFRQueuedInput event = {
+        .type = FFR_QUEUED_INPUT_CLIPBOARD_FILE_RESPONSE,
+        .fileRequestId = fileRequestId,
+    };
+    const FFRResult result = FFREnqueueInput(session, &event, 1U, false);
+    if (result != FFR_RESULT_OK && pthread_mutex_lock(&session->clipboardMutex) == 0) {
+        for (size_t index = 0U; index < FFR_MAX_CLIPBOARD_FILE_REQUESTS; index += 1U) {
+            FFRClipboardLocalFileRequest *candidate = &session->localFileRequests[index];
+            if (candidate->active && candidate->requestId == fileRequestId) {
+                free(candidate->responseBytes);
+                memset(candidate, 0, sizeof(*candidate));
+                break;
+            }
+        }
+        pthread_mutex_unlock(&session->clipboardMutex);
+    }
+    return result;
+}
 
-    const FFRQueuedInput event = { .type = FFR_QUEUED_INPUT_CLIPBOARD_TEXT };
+FFRResult FFRSessionRequestRemoteFileContents(FFRSession *session,
+                                              uint64_t generation,
+                                              uint32_t streamId,
+                                              uint32_t listIndex,
+                                              FFRClipboardFileRequestKind kind,
+                                              uint64_t offset,
+                                              uint32_t requestedBytes)
+{
+    if (session == NULL || generation == 0U || streamId == 0U ||
+        (kind != FFR_CLIPBOARD_FILE_REQUEST_SIZE &&
+         kind != FFR_CLIPBOARD_FILE_REQUEST_RANGE) ||
+        (kind == FFR_CLIPBOARD_FILE_REQUEST_RANGE &&
+         (requestedBytes == 0U || requestedBytes > FFR_MAX_CLIPBOARD_FILE_RANGE_BYTES ||
+          UINT64_MAX - offset < requestedBytes))) {
+        return FFR_RESULT_INVALID_ARGUMENT;
+    }
+    const FFRQueuedInput event = {
+        .type = FFR_QUEUED_INPUT_CLIPBOARD_FILE_REQUEST,
+        .clipboardGeneration = generation,
+        .streamId = streamId,
+        .fileListIndex = listIndex,
+        .fileRequestKind = kind,
+        .fileOffset = offset,
+        .fileRequestedBytes = requestedBytes,
+    };
     return FFREnqueueInput(session, &event, 1U, false);
 }
 
@@ -671,8 +914,22 @@ static bool FFRProcessInputEvent(FFRSession *session, const FFRQueuedInput *even
         session->pendingMonitorCount = event->monitorCount;
         session->hasPendingResize = true;
         return FFRSendPendingResize(session);
-    case FFR_QUEUED_INPUT_CLIPBOARD_TEXT:
+    case FFR_QUEUED_INPUT_CLIPBOARD_OFFER:
         return FFRSendClipboardFormatList(session);
+    case FFR_QUEUED_INPUT_CLIPBOARD_REQUEST:
+        return FFRSendClipboardDataRequest(session, event->clipboardGeneration,
+                                           event->clipboardFormatId,
+                                           event->clipboardFormat);
+    case FFR_QUEUED_INPUT_CLIPBOARD_FILE_RESPONSE:
+        return FFRSendClipboardFileResponse(session, event->fileRequestId);
+    case FFR_QUEUED_INPUT_CLIPBOARD_FILE_REQUEST:
+        return FFRSendClipboardFileRequest(session,
+                                           event->clipboardGeneration,
+                                           event->streamId,
+                                           event->fileListIndex,
+                                           event->fileRequestKind,
+                                           event->fileOffset,
+                                           event->fileRequestedBytes);
     default:
         return false;
     }
@@ -738,6 +995,23 @@ FFRResult FFRSessionConfigure(FFRSession *session,
     const bool hasRemoteApp = settings->remoteAppProgram != NULL;
     const bool hasMicrophone = settings->microphoneRedirection;
     const bool enableGraphicsPipeline = !hasRemoteApp;
+    const bool hasClipboard = settings->clipboardText ||
+        settings->clipboardFormattedText || settings->clipboardImages ||
+        settings->clipboardFiles;
+    const bool hasExplicitClipboardDirection = settings->clipboardLocalToRemote ||
+        settings->clipboardRemoteToLocal;
+    const bool clipboardLocalToRemote = hasClipboard &&
+        (settings->clipboardLocalToRemote || !hasExplicitClipboardDirection);
+    const bool clipboardRemoteToLocal = hasClipboard &&
+        (settings->clipboardRemoteToLocal || !hasExplicitClipboardDirection);
+    uint32_t clipboardFeatureMask =
+        (clipboardLocalToRemote ? CLIPRDR_FLAG_LOCAL_TO_REMOTE : 0U) |
+        (clipboardRemoteToLocal ? CLIPRDR_FLAG_REMOTE_TO_LOCAL : 0U);
+    if (settings->clipboardFiles) {
+        clipboardFeatureMask |=
+            (clipboardLocalToRemote ? CLIPRDR_FLAG_LOCAL_TO_REMOTE_FILES : 0U) |
+            (clipboardRemoteToLocal ? CLIPRDR_FLAG_REMOTE_TO_LOCAL_FILES : 0U);
+    }
     if (hasGateway) {
         if (settings->gatewayPort == 0U ||
             (!settings->gatewayUseSameCredentials &&
@@ -811,12 +1085,9 @@ FFRResult FFRSessionConfigure(FFRSession *session,
         freerdp_settings_set_bool(target, FreeRDP_RedirectDrives, FALSE) &&
         freerdp_settings_set_bool(target, FreeRDP_RedirectHomeDrive, FALSE) &&
         freerdp_settings_set_bool(target, FreeRDP_RedirectClipboard,
-                                  settings->clipboardText) &&
+                                  hasClipboard) &&
         freerdp_settings_set_uint32(target, FreeRDP_ClipboardFeatureMask,
-                                    settings->clipboardText
-                                        ? (CLIPRDR_FLAG_LOCAL_TO_REMOTE |
-                                           CLIPRDR_FLAG_REMOTE_TO_LOCAL)
-                                        : 0U) &&
+                                    clipboardFeatureMask) &&
         freerdp_settings_set_bool(target, FreeRDP_SupportDynamicChannels,
                                   enableGraphicsPipeline || settings->dynamicResolution ||
                                       hasMicrophone) &&
@@ -897,7 +1168,7 @@ FFRResult FFRSessionConfigure(FFRSession *session,
         !FFRAddDynamicChannel(target, DISP_CHANNEL_NAME)) {
         return FFR_RESULT_SETTINGS_FAILED;
     }
-    if (settings->clipboardText &&
+    if (hasClipboard &&
         !FFRAddStaticChannel(target, CLIPRDR_SVC_CHANNEL_NAME)) {
         return FFR_RESULT_SETTINGS_FAILED;
     }
@@ -920,7 +1191,13 @@ FFRResult FFRSessionConfigure(FFRSession *session,
     session->certificateWasChanged = false;
     session->negotiatedSecurityProtocol = FFR_SECURITY_PROTOCOL_UNKNOWN;
     session->dynamicResolutionEnabled = settings->dynamicResolution;
-    session->clipboardTextEnabled = settings->clipboardText;
+    session->clipboardEnabled = hasClipboard;
+    session->clipboardTextAllowed = settings->clipboardText;
+    session->clipboardFormattedTextAllowed = settings->clipboardFormattedText;
+    session->clipboardImagesAllowed = settings->clipboardImages;
+    session->clipboardFilesAllowed = settings->clipboardFiles;
+    session->clipboardLocalToRemote = clipboardLocalToRemote;
+    session->clipboardRemoteToLocal = clipboardRemoteToLocal;
     FFRClearClipboardState(session);
     session->displayControl = NULL;
     session->displayControlActivated = false;

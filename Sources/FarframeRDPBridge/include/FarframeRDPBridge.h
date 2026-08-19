@@ -82,10 +82,20 @@ typedef struct FFRConnectionSettings {
     /// bridge may send monitor-layout updates from the owner thread while the
     /// session is connected.
     bool dynamicResolution;
-    /// Enables pure-text clipboard redirection for the session. The bridge only
-    /// advertises CF_UNICODETEXT, applies a fixed text-size limit, and does not
-    /// enable image, file, or path clipboard formats.
+    /// Enables CF_UNICODETEXT when clipboard redirection is active.
     bool clipboardText;
+    /// Enables registered HTML/RTF formats. Payloads remain bounded opaque
+    /// bytes; the bridge never renders them.
+    bool clipboardFormattedText;
+    /// Enables PNG, CF_DIB, and CF_DIBV5 with fixed encoded-size limits.
+    bool clipboardImages;
+    /// Enables FileGroupDescriptorW. File streaming still requires the
+    /// dedicated bounded file APIs and capability negotiation.
+    bool clipboardFiles;
+    /// Direction policy. If clipboard is enabled and both are false, both are
+    /// enabled for source compatibility with callers built against ABI 12.
+    bool clipboardLocalToRemote;
+    bool clipboardRemoteToLocal;
     /// Enables remote audio playback through FreeRDP rdpsnd. On macOS builds
     /// Farframe uses FreeRDP's Core Audio backend and follows the system output
     /// device; drive, printer, smart-card, and other device mappings remain
@@ -198,8 +208,43 @@ typedef struct FFRGraphicsEvent {
 
 typedef enum FFRClipboardEventType {
     FFR_CLIPBOARD_EVENT_READY = 1,
-    FFR_CLIPBOARD_EVENT_REMOTE_TEXT = 2
+    FFR_CLIPBOARD_EVENT_REMOTE_TEXT = 2,
+    /// A new remote clipboard generation is available. `formats` is borrowed.
+    FFR_CLIPBOARD_EVENT_REMOTE_OFFER = 3,
+    /// Payload for a request previously submitted with FFRSessionRequestClipboardData.
+    FFR_CLIPBOARD_EVENT_REMOTE_DATA = 4,
+    FFR_CLIPBOARD_EVENT_LOCAL_FILE_REQUEST = 5,
+    FFR_CLIPBOARD_EVENT_REMOTE_FILE_DATA = 6
 } FFRClipboardEventType;
+
+typedef enum FFRClipboardFileRequestKind {
+    FFR_CLIPBOARD_FILE_REQUEST_SIZE = 1,
+    FFR_CLIPBOARD_FILE_REQUEST_RANGE = 2
+} FFRClipboardFileRequestKind;
+
+typedef enum FFRClipboardFormatKind {
+    FFR_CLIPBOARD_FORMAT_UNICODE_TEXT = 1,
+    FFR_CLIPBOARD_FORMAT_HTML = 2,
+    FFR_CLIPBOARD_FORMAT_RTF = 3,
+    FFR_CLIPBOARD_FORMAT_DIB = 4,
+    FFR_CLIPBOARD_FORMAT_DIBV5 = 5,
+    FFR_CLIPBOARD_FORMAT_FILE_LIST = 6,
+    /// Registered Windows clipboard format named "PNG".
+    FFR_CLIPBOARD_FORMAT_PNG = 7
+} FFRClipboardFormatKind;
+
+typedef struct FFRClipboardFormatDescriptor {
+    FFRClipboardFormatKind kind;
+    /// Format ID in the namespace of the endpoint that owns the offer.
+    uint32_t formatId;
+} FFRClipboardFormatDescriptor;
+
+typedef struct FFRClipboardPayload {
+    FFRClipboardFormatKind kind;
+    /// Native cliprdr payload. The Bridge copies it during publication.
+    const uint8_t *bytes;
+    size_t length;
+} FFRClipboardPayload;
 
 typedef struct FFRClipboardEvent {
     FFRClipboardEventType type;
@@ -207,6 +252,23 @@ typedef struct FFRClipboardEvent {
     /// the terminating NUL from CF_UNICODETEXT.
     const uint16_t *utf16CodeUnits;
     size_t length;
+    /// Monotonic remote clipboard generation. A newer offer supersedes all
+    /// requests and responses from older generations.
+    uint64_t generation;
+    /// Borrowed descriptors for REMOTE_OFFER only.
+    const FFRClipboardFormatDescriptor *formats;
+    size_t formatCount;
+    /// Requested format and borrowed bytes for REMOTE_DATA only.
+    FFRClipboardFormatKind format;
+    const uint8_t *bytes;
+    /// File events only. `fileRequestId` is an opaque correlation token.
+    uint64_t fileRequestId;
+    uint32_t streamId;
+    uint32_t listIndex;
+    FFRClipboardFileRequestKind fileRequestKind;
+    uint64_t fileOffset;
+    uint32_t requestedBytes;
+    bool success;
 } FFRClipboardEvent;
 
 /// Called synchronously on the session owner thread.
@@ -351,6 +413,40 @@ FFRResult FFRSessionRequestMonitorLayout(FFRSession *session,
 FFRResult FFRSessionPublishClipboardText(FFRSession *session,
                                          const uint16_t *utf16CodeUnits,
                                          size_t length);
+
+/// Replaces the current local clipboard offer with copied, validated payloads.
+/// Safe from any thread while connected. The generation must be non-zero and
+/// monotonically increase for a session. Payload memory is borrowed only for
+/// this call. An empty array clears the offer.
+FFRResult FFRSessionPublishClipboardOffer(FFRSession *session,
+                                          uint64_t generation,
+                                          const FFRClipboardPayload *payloads,
+                                          size_t payloadCount);
+
+/// Requests one format from the current remote clipboard offer. Safe from any
+/// thread while connected. Only one format-data request may be outstanding;
+/// stale generations and overlapping requests are rejected.
+FFRResult FFRSessionRequestClipboardData(FFRSession *session,
+                                         uint64_t generation,
+                                         uint32_t remoteFormatId,
+                                         FFRClipboardFormatKind format);
+
+/// Completes a LOCAL_FILE_REQUEST asynchronously. RANGE payloads are capped at
+/// 1 MiB and SIZE payloads must contain one little-endian uint64.
+FFRResult FFRSessionRespondLocalFileRequest(FFRSession *session,
+                                            uint64_t fileRequestId,
+                                            bool success,
+                                            const uint8_t *bytes,
+                                            size_t length);
+
+/// Requests one remote file size or range. Only one request is in flight.
+FFRResult FFRSessionRequestRemoteFileContents(FFRSession *session,
+                                              uint64_t generation,
+                                              uint32_t streamId,
+                                              uint32_t listIndex,
+                                              FFRClipboardFileRequestKind kind,
+                                              uint64_t offset,
+                                              uint32_t requestedBytes);
 
 /// Drops unsent input and enqueues a release barrier. The owner thread releases
 /// every scan code and pointer button known to be down. Safe from any thread.

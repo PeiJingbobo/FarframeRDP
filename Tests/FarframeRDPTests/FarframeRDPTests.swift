@@ -140,6 +140,174 @@ final class FarframeRDPTests: XCTestCase {
         XCTAssertNil(ClipboardTextPolicy.acceptedText(nil))
     }
 
+    func testClipboardWireTextIsExplicitLittleEndianAndNullTerminated() throws {
+        let data = try XCTUnwrap(ClipboardTextPolicy.encodeWireText("A中😀"))
+
+        XCTAssertEqual(data.suffix(2), Data([0, 0]))
+        XCTAssertEqual(ClipboardTextPolicy.decodeWireText(data), "A中😀")
+        XCTAssertNil(ClipboardTextPolicy.decodeWireText(Data([0x41, 0x00])))
+        XCTAssertNil(ClipboardTextPolicy.decodeWireText(Data([0x41, 0x00, 0x00])))
+    }
+
+    func testClipboardHTMLCodecRoundTripsUTF8ByteOffsets() throws {
+        let fragment = Data("<p><b>你好</b> — clipboard</p>".utf8)
+        let encoded = try XCTUnwrap(ClipboardHTMLCodec.encode(fragment: fragment))
+
+        XCTAssertEqual(ClipboardHTMLCodec.decode(encoded), fragment)
+        XCTAssertLessThanOrEqual(encoded.count, ClipboardTransferPolicy.maximumRichTextBytes)
+    }
+
+    func testClipboardHTMLCodecRejectsMalformedOffsetsAndFallsBackToMarkers() throws {
+        let malformed = Data(
+            "Version:1.0\r\nStartHTML:0000000010\r\nEndHTML:9999999999\r\n".utf8
+        )
+        XCTAssertNil(ClipboardHTMLCodec.decode(malformed))
+
+        let marked = Data("<html><!--StartFragment-->ok<!--EndFragment--></html>".utf8)
+        XCTAssertEqual(ClipboardHTMLCodec.decode(marked), Data("ok".utf8))
+    }
+
+    func testClipboardDIBV5RoundTripPreservesDimensions() throws {
+        let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: 3,
+            pixelsHigh: 2,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 12,
+            bitsPerPixel: 32
+        )
+        let representation = try XCTUnwrap(bitmap)
+        representation.setColor(.systemRed, atX: 0, y: 0)
+        let png = try XCTUnwrap(representation.representation(using: .png, properties: [:]))
+        let dib = try XCTUnwrap(ClipboardDIBCodec.encodeV5(imageData: png))
+        let decoded = try XCTUnwrap(ClipboardDIBCodec.decode(dib))
+        let decodedBitmap = try XCTUnwrap(NSBitmapImageRep(data: decoded.png))
+
+        XCTAssertEqual(decodedBitmap.pixelsWide, 3)
+        XCTAssertEqual(decodedBitmap.pixelsHigh, 2)
+    }
+
+    func testClipboardPNGRoundTripPreservesDimensionsAndRejectsMislabeledData() throws {
+        let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: 4,
+            pixelsHigh: 3,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 16,
+            bitsPerPixel: 32
+        )
+        let representation = try XCTUnwrap(bitmap)
+        let png = try XCTUnwrap(representation.representation(using: .png, properties: [:]))
+        let decoded = try XCTUnwrap(ClipboardPNGCodec.decode(png))
+        let decodedBitmap = try XCTUnwrap(NSBitmapImageRep(data: decoded.png))
+
+        XCTAssertEqual(decodedBitmap.pixelsWide, 4)
+        XCTAssertEqual(decodedBitmap.pixelsHigh, 3)
+        XCTAssertNil(ClipboardPNGCodec.decode(Data("not a png".utf8)))
+    }
+
+    func testClipboardDIBRejectsOversizedDimensionsBeforeAllocatingPixels() {
+        var header = Data(count: 40)
+        header[0] = 40
+        header[4] = 1
+        header[6] = 1 // 65,537 pixels wide in little endian.
+        header[8] = 1
+        header[12] = 1
+        header[14] = 32
+
+        XCTAssertNil(ClipboardDIBCodec.decode(header))
+    }
+
+    func testLegacyRedirectOptionsRemainTextOnly() throws {
+        let legacy = Data(#"{"clipboardText":true,"audioPlayback":true}"#.utf8)
+        let decoded = try JSONDecoder().decode(ProfileRedirectOptions.self, from: legacy)
+
+        XCTAssertTrue(decoded.clipboardEnabled)
+        XCTAssertTrue(decoded.clipboardText)
+        XCTAssertFalse(decoded.clipboardFormattedText)
+        XCTAssertFalse(decoded.clipboardImages)
+        XCTAssertFalse(decoded.clipboardFiles)
+        XCTAssertEqual(decoded.clipboardDirection, .bidirectional)
+        XCTAssertTrue(decoded.confirmClipboardFiles)
+    }
+
+    func testDisabledLegacyClipboardKeepsMasterSwitchOff() throws {
+        let legacy = Data(#"{"clipboardText":false}"#.utf8)
+        let decoded = try JSONDecoder().decode(ProfileRedirectOptions.self, from: legacy)
+
+        XCTAssertFalse(decoded.clipboardEnabled)
+        XCTAssertFalse(decoded.clipboardText)
+    }
+
+    func testClipboardFileListRoundTripsBoundedBasenamesAndMetadata() throws {
+        let files = [
+            ClipboardLocalFileSnapshot(
+                url: URL(fileURLWithPath: "/unlogged/location/报告.txt"),
+                name: "报告.txt",
+                size: 42,
+                modificationDate: Date(timeIntervalSince1970: 1_700_000_000),
+                deviceID: 1,
+                inode: 2
+            ),
+            ClipboardLocalFileSnapshot(
+                url: URL(fileURLWithPath: "/unlogged/location/photo.png"),
+                name: "photo.png",
+                size: 1_024,
+                modificationDate: Date(timeIntervalSince1970: 1_700_000_100),
+                deviceID: 1,
+                inode: 3
+            ),
+        ]
+        let encoded = try XCTUnwrap(ClipboardFileListCodec.encode(files))
+        let decoded = try XCTUnwrap(ClipboardFileListCodec.decode(encoded))
+
+        XCTAssertEqual(decoded.map(\.name), ["报告.txt", "photo.png"])
+        XCTAssertEqual(decoded.map(\.size), [42, 1_024])
+        XCTAssertEqual(encoded.count, 4 + 2 * ClipboardFilePolicy.descriptorSize)
+    }
+
+    func testClipboardFilePolicyRejectsPathsReservedNamesAndUnsafeTypes() {
+        XCTAssertNil(ClipboardFilePolicy.acceptedName("../secret.txt"))
+        XCTAssertNil(ClipboardFilePolicy.acceptedName("folder\\secret.txt"))
+        XCTAssertNil(ClipboardFilePolicy.acceptedName("CON.txt"))
+        XCTAssertNil(ClipboardFilePolicy.acceptedName("trailing. "))
+        XCTAssertEqual(ClipboardFilePolicy.acceptedName("normal 文件.txt"), "normal 文件.txt")
+    }
+
+    func testClipboardFileListRejectsDirectoryAndDuplicateNames() throws {
+        let file = ClipboardLocalFileSnapshot(
+            url: URL(fileURLWithPath: "/unlogged/a.txt"),
+            name: "a.txt",
+            size: 1,
+            modificationDate: .now,
+            deviceID: 1,
+            inode: 1
+        )
+        XCTAssertNil(ClipboardFileListCodec.encode([
+            file,
+            ClipboardLocalFileSnapshot(
+                url: URL(fileURLWithPath: "/unlogged/A.TXT"),
+                name: "A.TXT",
+                size: 1,
+                modificationDate: .now,
+                deviceID: 1,
+                inode: 2
+            ),
+        ]))
+
+        var encoded = try XCTUnwrap(ClipboardFileListCodec.encode([file]))
+        encoded[4 + 36] = 0x10 // FILE_ATTRIBUTE_DIRECTORY
+        XCTAssertNil(ClipboardFileListCodec.decode(encoded))
+    }
+
     func testRemoteCanvasAcceptsFirstResponder() {
         let canvas = RemoteCanvasView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
 
@@ -382,6 +550,48 @@ final class FarframeRDPTests: XCTestCase {
         XCTAssertFalse(RemoteToolbarInteractionPolicy.togglesWindowZoom(clickCount: 1))
         XCTAssertTrue(RemoteToolbarInteractionPolicy.togglesWindowZoom(clickCount: 2))
         XCTAssertFalse(RemoteToolbarInteractionPolicy.togglesWindowZoom(clickCount: 3))
+    }
+
+    func testClipboardTransferPinsRemoteToolbarUntilProgressClears() {
+        let manager = RemoteSessionWindowManager()
+        manager.openRemoteWindow()
+
+        manager.updateClipboardFileTransfer(
+            progress: ClipboardTransferProgress(
+                direction: .windowsToMac,
+                fileCount: 2,
+                completedBytes: 2_048,
+                totalBytes: 4_096,
+                failed: false
+            )
+        )
+        XCTAssertTrue(manager.clipboardToolbarStatusIsVisible)
+        XCTAssertEqual(manager.clipboardToolbarProgressValue, 2_048)
+        XCTAssertTrue(manager.floatingToolbarIsVisible)
+
+        manager.updateClipboardFileTransfer(progress: nil)
+        XCTAssertFalse(manager.clipboardToolbarStatusIsVisible)
+        XCTAssertFalse(manager.floatingToolbarIsVisible)
+        manager.closeRemoteWindow()
+    }
+
+    func testRemoteFilesPublishFileURLsForFinderPaste() throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        let controller = RemoteClipboardController(pasteboard: pasteboard)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("remote.txt")
+        try Data("remote".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        controller.applyRemoteFiles([file])
+
+        let urls = pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL]
+        XCTAssertEqual(urls, [file])
     }
 
     func testFixedResolutionViewportIsCappedByAvailableScreenSize() {

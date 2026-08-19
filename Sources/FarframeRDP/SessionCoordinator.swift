@@ -1,5 +1,6 @@
 import FarframeCore
 import FarframeRDPBridge
+import Darwin
 import Foundation
 
 struct CertificateChallenge: Equatable, Sendable {
@@ -72,15 +73,87 @@ private enum ConnectionWorkerEvent: Sendable {
     case cursor(RemoteCursorUpdate)
     case clipboardReady
     case clipboardText(String)
+    case clipboardOffer(UInt64, [RemoteClipboardFormat])
+    case clipboardData(UInt64, ClipboardContentKind, Data?)
+    case clipboardFileApprovalRequested(ClipboardFileTransferApproval)
+    case clipboardFilesReady(UInt64, [URL])
+    case clipboardTransferProgress(UInt64?, ClipboardTransferProgress?)
     case displayControlReady
     case failed(ConnectionFailure)
     case finished
 }
 
+enum ClipboardContentKind: Int, Hashable, Sendable {
+    case unicodeText = 1
+    case html = 2
+    case rtf = 3
+    case dib = 4
+    case dibV5 = 5
+    case fileList = 6
+    case png = 7
+}
+
+struct RemoteClipboardFormat: Equatable, Sendable {
+    let kind: ClipboardContentKind
+    let formatID: UInt32
+}
+
+private struct LocalClipboardFileRequest: Sendable {
+    let requestID: UInt64
+    let generation: UInt64
+    let listIndex: UInt32
+    let kind: FFRClipboardFileRequestKind
+    let offset: UInt64
+    let requestedBytes: UInt32
+}
+
+enum ClipboardFileTransferDirection: Equatable, Sendable {
+    case macToWindows
+    case windowsToMac
+}
+
+struct ClipboardFileTransferApproval: Sendable {
+    let direction: ClipboardFileTransferDirection
+    let fileCount: Int
+    let totalBytes: UInt64
+}
+
+struct ClipboardTransferProgress: Equatable, Sendable {
+    let direction: ClipboardFileTransferDirection
+    let fileCount: Int
+    let completedBytes: UInt64
+    let totalBytes: UInt64
+    let failed: Bool
+}
+
+private final class RemoteClipboardDownloadState: @unchecked Sendable {
+    let generation: UInt64
+    let files: [ClipboardRemoteFileDescriptor]
+    let directory: URL
+    var completedURLs: [URL] = []
+    var fileIndex = 0
+    var offset: UInt64 = 0
+    var descriptor: Int32 = -1
+    var pendingStreamID: UInt32 = 0
+    var pendingKind = FFR_CLIPBOARD_FILE_REQUEST_SIZE
+
+    init(generation: UInt64, files: [ClipboardRemoteFileDescriptor], directory: URL) {
+        self.generation = generation
+        self.files = files
+        self.directory = directory
+    }
+}
+
 struct ConnectionChannelOptions: Equatable, Sendable {
     var dynamicResolution: Bool
     var monitorSelection: RemoteMonitorSelection
+    var clipboardEnabled: Bool
     var clipboardText: Bool
+    var clipboardFormattedText: Bool
+    var clipboardImages: Bool
+    var clipboardFiles: Bool
+    var clipboardDirection: ClipboardTransferDirection
+    var confirmClipboardFiles: Bool
     var audioPlayback: Bool
     var microphoneRedirection: Bool
     var microphoneDeviceName: String
@@ -91,7 +164,13 @@ struct ConnectionChannelOptions: Equatable, Sendable {
     static let defaults = ConnectionChannelOptions(
         dynamicResolution: true,
         monitorSelection: .window,
+        clipboardEnabled: true,
         clipboardText: true,
+        clipboardFormattedText: false,
+        clipboardImages: false,
+        clipboardFiles: false,
+        clipboardDirection: .bidirectional,
+        confirmClipboardFiles: true,
         audioPlayback: true,
         microphoneRedirection: false,
         microphoneDeviceName: "",
@@ -216,6 +295,18 @@ private final class ConnectionWorker: @unchecked Sendable {
     private var attemptConnected = false
     private var connectionWasEstablished = false
     private var attemptFailure: ConnectionFailure?
+    private var localClipboardGeneration: UInt64 = 0
+    private var localClipboardFiles: [ClipboardLocalFileSnapshot] = []
+    private var localFileTransferApproved = false
+    private var localFileTransferCancelled = false
+    private var localFileApprovalRequested = false
+    private var localFileProgressStarted = false
+    private var localFileApprovalResetToken: UInt64 = 0
+    private var pendingLocalFileRequests: [LocalClipboardFileRequest] = []
+    private var localFileCompletedBytes: [UInt64] = []
+    private let clipboardFileQueue = DispatchQueue(label: "com.farframe.rdp.clipboard-files")
+    private var remoteDownload: RemoteClipboardDownloadState?
+    private var nextRemoteFileStreamID: UInt32 = 0
 
     init(
         id: UUID,
@@ -231,6 +322,7 @@ private final class ConnectionWorker: @unchecked Sendable {
         self.reconnectPolicy = reconnectPolicy
         self.password = password
         self.handler = handler
+        self.localFileTransferApproved = !channelOptions.confirmClipboardFiles
     }
 
     func start() {
@@ -343,22 +435,625 @@ private final class ConnectionWorker: @unchecked Sendable {
         lock.unlock()
     }
 
-    func publishClipboardText(_ text: String?) {
-        guard channelOptions.clipboardText else { return }
-        let utf16 = text.map { Array($0.utf16) } ?? []
+    func publishClipboardContent(_ content: ClipboardPayloadSet) {
+        guard channelOptions.clipboardEnabled,
+              channelOptions.clipboardDirection.allowsLocalToRemote else { return }
         lock.lock()
         guard let current = session else {
             lock.unlock()
             return
         }
-        if utf16.isEmpty {
-            _ = FFRSessionPublishClipboardText(current, nil, 0)
+        localClipboardGeneration &+= 1
+        if localClipboardGeneration == 0 {
+            localClipboardGeneration = 1
+        }
+        let generation = localClipboardGeneration
+        let selected = content.representations
+            .filter { kind, _ in
+                switch kind {
+                case .unicodeText:
+                    channelOptions.clipboardText
+                case .html, .rtf:
+                    channelOptions.clipboardFormattedText
+                case .dib, .dibV5, .png:
+                    channelOptions.clipboardImages
+                case .fileList:
+                    channelOptions.clipboardFiles
+                }
+            }
+            .sorted { $0.key.rawValue < $1.key.rawValue }
+        localClipboardFiles = selected.contains(where: { $0.key == .fileList })
+            ? content.localFiles : []
+        localFileTransferApproved = !channelOptions.confirmClipboardFiles
+        localFileTransferCancelled = false
+        localFileApprovalRequested = false
+        localFileProgressStarted = false
+        localFileApprovalResetToken &+= 1
+        for request in pendingLocalFileRequests {
+            respondToLocalFileRequest(request, data: nil, session: current)
+        }
+        pendingLocalFileRequests.removeAll()
+        localFileCompletedBytes = Array(repeating: 0, count: localClipboardFiles.count)
+        guard !selected.isEmpty else {
+            _ = FFRSessionPublishClipboardOffer(current, generation, nil, 0)
+            lock.unlock()
+            return
+        }
+        var allocations: [UnsafeMutablePointer<UInt8>] = []
+        var payloads: [FFRClipboardPayload] = []
+        for (kind, data) in selected where !data.isEmpty {
+            let storage = UnsafeMutablePointer<UInt8>.allocate(capacity: data.count)
+            data.copyBytes(to: storage, count: data.count)
+            allocations.append(storage)
+            payloads.append(FFRClipboardPayload(
+                kind: FFRClipboardFormatKind(rawValue: UInt32(kind.rawValue)),
+                bytes: UnsafePointer(storage),
+                length: data.count
+            ))
+        }
+        if payloads.isEmpty {
+            _ = FFRSessionPublishClipboardOffer(current, generation, nil, 0)
         } else {
-            utf16.withUnsafeBufferPointer { buffer in
-                _ = FFRSessionPublishClipboardText(current, buffer.baseAddress, buffer.count)
+            payloads.withUnsafeBufferPointer { buffer in
+                _ = FFRSessionPublishClipboardOffer(
+                    current,
+                    generation,
+                    buffer.baseAddress,
+                    buffer.count
+                )
             }
         }
+        for allocation in allocations { allocation.deallocate() }
         lock.unlock()
+    }
+
+    func requestClipboardData(generation: UInt64, format: RemoteClipboardFormat) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let current = session else { return }
+        _ = FFRSessionRequestClipboardData(
+            current,
+            generation,
+            format.formatID,
+            FFRClipboardFormatKind(rawValue: UInt32(format.kind.rawValue))
+        )
+    }
+
+    func beginRemoteFileDownload(
+        generation: UInt64,
+        files: [ClipboardRemoteFileDescriptor]
+    ) {
+        clipboardFileQueue.async { [weak self] in
+            self?.startRemoteFileDownload(generation: generation, files: files)
+        }
+    }
+
+    func cancelRemoteFileDownload() {
+        clipboardFileQueue.async { [weak self] in
+            self?.finishRemoteFileDownload(success: false, cancelled: true)
+        }
+    }
+
+    func cancelClipboardFileTransfer() {
+        lock.lock()
+        localFileTransferCancelled = true
+        let pending = pendingLocalFileRequests
+        pendingLocalFileRequests.removeAll()
+        localFileApprovalRequested = false
+        lock.unlock()
+        for request in pending {
+            respondToLocalFileRequest(request, data: nil)
+        }
+        cancelRemoteFileDownload()
+        handler(id, .clipboardTransferProgress(nil, nil))
+    }
+
+    private func cancelRemoteFileDownloadSynchronously() {
+        clipboardFileQueue.sync {
+            finishRemoteFileDownload(success: false, cancelled: true)
+        }
+    }
+
+    private func startRemoteFileDownload(
+        generation: UInt64,
+        files: [ClipboardRemoteFileDescriptor]
+    ) {
+        finishRemoteFileDownload(success: false, cancelled: true)
+        guard !files.isEmpty,
+              files.count <= ClipboardFilePolicy.maximumFileCount else { return }
+        let totalBytes = files.reduce(UInt64(0)) { $0 + $1.size }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FarframeRDP-Clipboard", isDirectory: true)
+        do {
+            try prepareClipboardCacheRoot(root)
+            cleanStaleClipboardDirectories(in: root)
+            let fileSystem = try FileManager.default.attributesOfFileSystem(forPath: root.path)
+            let freeBytes = (fileSystem[.systemFreeSize] as? NSNumber)?.uint64Value ?? 0
+            guard freeBytes > totalBytes + 256 * 1024 * 1024 else {
+                throw CocoaError(.fileWriteOutOfSpace)
+            }
+            let directory = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: false,
+                attributes: [.posixPermissions: 0o700]
+            )
+            remoteDownload = RemoteClipboardDownloadState(
+                generation: generation,
+                files: files,
+                directory: directory
+            )
+            publishRemoteFileProgress(failed: false)
+            requestCurrentRemoteFileSize()
+        } catch {
+            finishRemoteFileDownload(success: false, cancelled: false)
+        }
+    }
+
+    private func prepareClipboardCacheRoot(_ root: URL) throws {
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        var status = stat()
+        guard lstat(root.path, &status) == 0,
+              status.st_mode & S_IFMT == S_IFDIR,
+              status.st_mode & S_IFMT != S_IFLNK else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
+        guard chmod(root.path, 0o700) == 0 else {
+            throw CocoaError(.fileWriteNoPermission)
+        }
+    }
+
+    private func requestCurrentRemoteFileSize() {
+        guard let download = remoteDownload, download.fileIndex < download.files.count else {
+            finishRemoteFileDownload(success: true, cancelled: false)
+            return
+        }
+        nextRemoteFileStreamID &+= 1
+        if nextRemoteFileStreamID == 0 { nextRemoteFileStreamID = 1 }
+        download.pendingStreamID = nextRemoteFileStreamID
+        download.pendingKind = FFR_CLIPBOARD_FILE_REQUEST_SIZE
+        guard requestRemoteFileContents(
+            generation: download.generation,
+            streamID: nextRemoteFileStreamID,
+            listIndex: UInt32(download.fileIndex),
+            kind: FFR_CLIPBOARD_FILE_REQUEST_SIZE,
+            offset: 0,
+            requestedBytes: 0
+        ) else {
+            finishRemoteFileDownload(success: false, cancelled: false)
+            return
+        }
+        scheduleRemoteFileTimeout(generation: download.generation, streamID: nextRemoteFileStreamID)
+    }
+
+    private func requestCurrentRemoteFileRange() {
+        guard let download = remoteDownload else { return }
+        let file = download.files[download.fileIndex]
+        guard download.offset < file.size else {
+            completeCurrentRemoteFile()
+            return
+        }
+        let count = UInt32(min(UInt64(1024 * 1024), file.size - download.offset))
+        nextRemoteFileStreamID &+= 1
+        if nextRemoteFileStreamID == 0 { nextRemoteFileStreamID = 1 }
+        download.pendingStreamID = nextRemoteFileStreamID
+        download.pendingKind = FFR_CLIPBOARD_FILE_REQUEST_RANGE
+        guard requestRemoteFileContents(
+            generation: download.generation,
+            streamID: nextRemoteFileStreamID,
+            listIndex: UInt32(download.fileIndex),
+            kind: FFR_CLIPBOARD_FILE_REQUEST_RANGE,
+            offset: download.offset,
+            requestedBytes: count
+        ) else {
+            finishRemoteFileDownload(success: false, cancelled: false)
+            return
+        }
+        scheduleRemoteFileTimeout(generation: download.generation, streamID: nextRemoteFileStreamID)
+    }
+
+    private func scheduleRemoteFileTimeout(generation: UInt64, streamID: UInt32) {
+        clipboardFileQueue.asyncAfter(deadline: .now() + 60) { [weak self] in
+            guard let self,
+                  let download = self.remoteDownload,
+                  download.generation == generation,
+                  download.pendingStreamID == streamID else { return }
+            self.finishRemoteFileDownload(success: false, cancelled: false)
+        }
+    }
+
+    private func requestRemoteFileContents(
+        generation: UInt64,
+        streamID: UInt32,
+        listIndex: UInt32,
+        kind: FFRClipboardFileRequestKind,
+        offset: UInt64,
+        requestedBytes: UInt32
+    ) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let current = session else { return false }
+        return FFRSessionRequestRemoteFileContents(
+            current,
+            generation,
+            streamID,
+            listIndex,
+            kind,
+            offset,
+            requestedBytes
+        ) == FFR_RESULT_OK
+    }
+
+    private func receiveRemoteFileData(
+        generation: UInt64,
+        streamID: UInt32,
+        success: Bool,
+        data: Data
+    ) {
+        clipboardFileQueue.async { [weak self] in
+            guard let self,
+                  let download = self.remoteDownload,
+                  download.generation == generation,
+                  download.pendingStreamID == streamID,
+                  success else {
+                self?.finishRemoteFileDownload(success: false, cancelled: false)
+                return
+            }
+            if download.pendingKind == FFR_CLIPBOARD_FILE_REQUEST_SIZE {
+                guard data.count == 8 else {
+                    self.finishRemoteFileDownload(success: false, cancelled: false)
+                    return
+                }
+                let remoteSize = data.enumerated().reduce(UInt64(0)) {
+                    $0 | (UInt64($1.element) << UInt64($1.offset * 8))
+                }
+                guard remoteSize == download.files[download.fileIndex].size,
+                      self.openCurrentRemoteFile() else {
+                    self.finishRemoteFileDownload(success: false, cancelled: false)
+                    return
+                }
+                if remoteSize == 0 {
+                    self.completeCurrentRemoteFile()
+                } else {
+                    self.requestCurrentRemoteFileRange()
+                }
+                return
+            }
+            guard !data.isEmpty,
+                  download.descriptor >= 0,
+                  data.count <= 1024 * 1024 else {
+                self.finishRemoteFileDownload(success: false, cancelled: false)
+                return
+            }
+            let wrote = data.withUnsafeBytes { bytes in
+                pwrite(download.descriptor, bytes.baseAddress, bytes.count, off_t(download.offset))
+            }
+            guard wrote == data.count else {
+                self.finishRemoteFileDownload(success: false, cancelled: false)
+                return
+            }
+            download.offset += UInt64(data.count)
+            self.publishRemoteFileProgress(failed: false)
+            self.requestCurrentRemoteFileRange()
+        }
+    }
+
+    private func openCurrentRemoteFile() -> Bool {
+        guard let download = remoteDownload else { return false }
+        let file = download.files[download.fileIndex]
+        let url = download.directory.appendingPathComponent(file.name, isDirectory: false)
+        let descriptor = open(url.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+        guard descriptor >= 0 else { return false }
+        download.descriptor = descriptor
+        download.offset = 0
+        download.completedURLs.append(url)
+        return true
+    }
+
+    private func completeCurrentRemoteFile() {
+        guard let download = remoteDownload else { return }
+        if download.descriptor >= 0 {
+            close(download.descriptor)
+            download.descriptor = -1
+        }
+        let file = download.files[download.fileIndex]
+        let url = download.completedURLs[download.fileIndex]
+        if let date = file.modificationDate {
+            try? FileManager.default.setAttributes(
+                [.modificationDate: date],
+                ofItemAtPath: url.path
+            )
+        }
+        download.fileIndex += 1
+        download.offset = 0
+        requestCurrentRemoteFileSize()
+    }
+
+    private func publishRemoteFileProgress(failed: Bool) {
+        guard let download = remoteDownload else { return }
+        let completed = download.files.prefix(download.fileIndex).reduce(UInt64(0)) { $0 + $1.size }
+            + download.offset
+        handler(id, .clipboardTransferProgress(download.generation, ClipboardTransferProgress(
+            direction: .windowsToMac,
+            fileCount: download.files.count,
+            completedBytes: completed,
+            totalBytes: download.files.reduce(0) { $0 + $1.size },
+            failed: failed
+        )))
+    }
+
+    private func finishRemoteFileDownload(success: Bool, cancelled: Bool) {
+        guard let download = remoteDownload else { return }
+        remoteDownload = nil
+        if download.descriptor >= 0 { close(download.descriptor) }
+        if success {
+            handler(id, .clipboardFilesReady(download.generation, download.completedURLs))
+            handler(id, .clipboardTransferProgress(download.generation, nil))
+        } else {
+            try? FileManager.default.removeItem(at: download.directory)
+            if !cancelled {
+                handler(id, .clipboardTransferProgress(download.generation, ClipboardTransferProgress(
+                    direction: .windowsToMac,
+                    fileCount: download.files.count,
+                    completedBytes: 0,
+                    totalBytes: download.files.reduce(0) { $0 + $1.size },
+                    failed: true
+                )))
+            } else {
+                handler(id, .clipboardTransferProgress(download.generation, nil))
+            }
+        }
+    }
+
+    private func cleanStaleClipboardDirectories(in root: URL) {
+        let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        for entry in entries {
+            let date = try? entry.resourceValues(forKeys: [.contentModificationDateKey])
+                .contentModificationDate
+            if let date, date < cutoff { try? FileManager.default.removeItem(at: entry) }
+        }
+    }
+
+    private func handleLocalFileRequest(_ request: LocalClipboardFileRequest) {
+        lock.lock()
+        if localFileTransferCancelled {
+            lock.unlock()
+            respondToLocalFileRequest(request, data: nil)
+            return
+        }
+        if !localFileTransferApproved {
+            pendingLocalFileRequests.append(request)
+            let shouldRequestApproval = !localFileApprovalRequested
+            localFileApprovalRequested = true
+            let approval = ClipboardFileTransferApproval(
+                direction: .macToWindows,
+                fileCount: localClipboardFiles.count,
+                totalBytes: localClipboardFiles.reduce(0) { $0 + $1.size }
+            )
+            lock.unlock()
+            if shouldRequestApproval { handler(id, .clipboardFileApprovalRequested(approval)) }
+            return
+        }
+        localFileApprovalResetToken &+= 1
+        lock.unlock()
+        performLocalFileRequest(request)
+    }
+
+    func resolveLocalFileTransferApproval(_ approved: Bool) {
+        lock.lock()
+        localFileTransferApproved = approved && !localFileTransferCancelled
+        let shouldTransfer = localFileTransferApproved
+        localFileApprovalRequested = false
+        let requests = pendingLocalFileRequests
+        pendingLocalFileRequests.removeAll()
+        lock.unlock()
+        for request in requests {
+            if shouldTransfer {
+                performLocalFileRequest(request)
+            } else {
+                respondToLocalFileRequest(request, data: nil)
+            }
+        }
+    }
+
+    private func performLocalFileRequest(_ request: LocalClipboardFileRequest) {
+        publishLocalFileProgressIfNeeded(generation: request.generation)
+        clipboardFileQueue.async { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let current = self.session
+            let file = !self.localFileTransferCancelled &&
+                request.generation == self.localClipboardGeneration &&
+                Int(request.listIndex) < self.localClipboardFiles.count
+                ? self.localClipboardFiles[Int(request.listIndex)] : nil
+            self.lock.unlock()
+            guard let current else { return }
+            guard let file else {
+                self.respondToLocalFileRequest(request, data: nil, session: current)
+                return
+            }
+            guard let data = self.readLocalFile(file, request: request) else {
+                self.respondToLocalFileRequest(request, data: nil, session: current)
+                return
+            }
+            self.respondToLocalFileRequest(request, data: data, session: current)
+            if request.kind == FFR_CLIPBOARD_FILE_REQUEST_RANGE {
+                self.publishLocalFileProgress(request: request, deliveredBytes: data.count)
+            } else if request.kind == FFR_CLIPBOARD_FILE_REQUEST_SIZE {
+                self.finishZeroByteLocalFileTransferIfNeeded(generation: request.generation)
+            }
+        }
+    }
+
+    private func finishZeroByteLocalFileTransferIfNeeded(generation: UInt64) {
+        lock.lock()
+        let isEmptyTransfer = generation == localClipboardGeneration &&
+            !localClipboardFiles.isEmpty &&
+            localClipboardFiles.allSatisfy { $0.size == 0 }
+        lock.unlock()
+        if isEmptyTransfer {
+            finishLocalFileTransferIfNeeded(generation: generation)
+            handler(id, .clipboardTransferProgress(nil, nil))
+        }
+    }
+
+    private func publishLocalFileProgressIfNeeded(generation: UInt64) {
+        lock.lock()
+        guard generation == localClipboardGeneration,
+              !localFileProgressStarted,
+              !localClipboardFiles.isEmpty else {
+            lock.unlock()
+            return
+        }
+        localFileProgressStarted = true
+        let fileCount = localClipboardFiles.count
+        let total = localClipboardFiles.reduce(UInt64(0)) { $0 + $1.size }
+        lock.unlock()
+        handler(id, .clipboardTransferProgress(nil, ClipboardTransferProgress(
+            direction: .macToWindows,
+            fileCount: fileCount,
+            completedBytes: 0,
+            totalBytes: total,
+            failed: false
+        )))
+    }
+
+    private func publishLocalFileProgress(
+        request: LocalClipboardFileRequest,
+        deliveredBytes: Int
+    ) {
+        lock.lock()
+        guard request.generation == localClipboardGeneration,
+              Int(request.listIndex) < localClipboardFiles.count,
+              Int(request.listIndex) < localFileCompletedBytes.count else {
+            lock.unlock()
+            return
+        }
+        let end = min(
+            localClipboardFiles[Int(request.listIndex)].size,
+            request.offset + UInt64(deliveredBytes)
+        )
+        localFileCompletedBytes[Int(request.listIndex)] = max(
+            localFileCompletedBytes[Int(request.listIndex)],
+            end
+        )
+        let completed = localFileCompletedBytes.reduce(0, +)
+        let total = localClipboardFiles.reduce(UInt64(0)) { $0 + $1.size }
+        let fileCount = localClipboardFiles.count
+        lock.unlock()
+        if completed >= total {
+            finishLocalFileTransferIfNeeded(generation: request.generation)
+        }
+        handler(id, completed >= total
+            ? .clipboardTransferProgress(nil, nil)
+            : .clipboardTransferProgress(nil, ClipboardTransferProgress(
+                direction: .macToWindows,
+                fileCount: fileCount,
+                completedBytes: completed,
+                totalBytes: total,
+                failed: false
+            )))
+    }
+
+    private func finishLocalFileTransferIfNeeded(generation: UInt64) {
+        guard channelOptions.confirmClipboardFiles else { return }
+        lock.lock()
+        localFileApprovalResetToken &+= 1
+        let token = localFileApprovalResetToken
+        lock.unlock()
+        clipboardFileQueue.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            guard self.localFileApprovalResetToken == token,
+                  self.localClipboardGeneration == generation else {
+                self.lock.unlock()
+                return
+            }
+            self.localFileTransferApproved = false
+            self.localFileProgressStarted = false
+            self.localFileCompletedBytes = Array(
+                repeating: 0,
+                count: self.localClipboardFiles.count
+            )
+            self.lock.unlock()
+        }
+    }
+
+    private func respondToLocalFileRequest(
+        _ request: LocalClipboardFileRequest,
+        data: Data?,
+        session suppliedSession: OpaquePointer? = nil
+    ) {
+        let respond: (OpaquePointer) -> Void = { current in
+            guard let data else {
+                _ = FFRSessionRespondLocalFileRequest(
+                    current,
+                    request.requestID,
+                    false,
+                    nil,
+                    0
+                )
+                return
+            }
+            data.withUnsafeBytes { bytes in
+                _ = FFRSessionRespondLocalFileRequest(
+                    current,
+                    request.requestID,
+                    true,
+                    bytes.bindMemory(to: UInt8.self).baseAddress,
+                    bytes.count
+                )
+            }
+        }
+        if let suppliedSession {
+            respond(suppliedSession)
+            return
+        }
+        lock.lock()
+        if let current = session { respond(current) }
+        lock.unlock()
+    }
+
+    private func readLocalFile(
+        _ file: ClipboardLocalFileSnapshot,
+        request: LocalClipboardFileRequest
+    ) -> Data? {
+        let descriptor = open(file.url.path, O_RDONLY | O_NOFOLLOW)
+        guard descriptor >= 0 else { return nil }
+        defer { close(descriptor) }
+        var status = stat()
+        guard fstat(descriptor, &status) == 0,
+              status.st_mode & S_IFMT == S_IFREG,
+              UInt64(status.st_dev) == file.deviceID,
+              UInt64(status.st_ino) == file.inode,
+              UInt64(status.st_size) == file.size else {
+            return nil
+        }
+        if request.kind == FFR_CLIPBOARD_FILE_REQUEST_SIZE {
+            var size = file.size.littleEndian
+            return withUnsafeBytes(of: &size) { Data($0) }
+        }
+        guard request.kind == FFR_CLIPBOARD_FILE_REQUEST_RANGE,
+              request.offset <= file.size else { return nil }
+        let remaining = file.size - request.offset
+        let count = min(UInt64(request.requestedBytes), remaining)
+        guard let offset = off_t(exactly: request.offset),
+              let byteCount = Int(exactly: count) else { return nil }
+        var data = Data(count: byteCount)
+        let readCount = data.withUnsafeMutableBytes { bytes in
+            pread(descriptor, bytes.baseAddress, byteCount, offset)
+        }
+        guard readCount >= 0, readCount == byteCount else { return nil }
+        return data
     }
 
     fileprivate func receive(event: FFREvent) {
@@ -484,6 +1179,46 @@ private final class ConnectionWorker: @unchecked Sendable {
             }
             let buffer = UnsafeBufferPointer(start: baseAddress, count: count)
             handler(id, .clipboardText(String(decoding: buffer, as: UTF16.self)))
+        case FFR_CLIPBOARD_EVENT_REMOTE_OFFER:
+            guard let baseAddress = event.formats,
+                  let count = Int(exactly: event.formatCount),
+                  count <= 16 else {
+                return
+            }
+            let formats: [RemoteClipboardFormat] = UnsafeBufferPointer(
+                start: baseAddress,
+                count: count
+            ).compactMap { value -> RemoteClipboardFormat? in
+                guard let kind = ClipboardContentKind(rawValue: Int(value.kind.rawValue)) else {
+                    return nil
+                }
+                return RemoteClipboardFormat(kind: kind, formatID: value.formatId)
+            }
+            handler(id, .clipboardOffer(event.generation, formats))
+        case FFR_CLIPBOARD_EVENT_REMOTE_DATA:
+            guard let kind = ClipboardContentKind(rawValue: Int(event.format.rawValue)),
+                  let length = Int(exactly: event.length) else {
+                return
+            }
+            let data = event.bytes.map { Data(bytes: $0, count: length) }
+            handler(id, .clipboardData(event.generation, kind, data))
+        case FFR_CLIPBOARD_EVENT_LOCAL_FILE_REQUEST:
+            handleLocalFileRequest(LocalClipboardFileRequest(
+                requestID: event.fileRequestId,
+                generation: event.generation,
+                listIndex: event.listIndex,
+                kind: event.fileRequestKind,
+                offset: event.fileOffset,
+                requestedBytes: event.requestedBytes
+            ))
+        case FFR_CLIPBOARD_EVENT_REMOTE_FILE_DATA:
+            let data = event.bytes.map { Data(bytes: $0, count: event.length) } ?? Data()
+            receiveRemoteFileData(
+                generation: event.generation,
+                streamID: event.streamId,
+                success: event.success,
+                data: data
+            )
         default:
             break
         }
@@ -565,6 +1300,9 @@ private final class ConnectionWorker: @unchecked Sendable {
         session = createdSession
         lock.unlock()
         defer {
+            // Drain queued file I/O before destroying the session. This prevents a
+            // stale range task from targeting a replacement session after reconnect.
+            cancelRemoteFileDownloadSynchronously()
             lock.lock()
             session = nil
             lock.unlock()
@@ -577,7 +1315,15 @@ private final class ConnectionWorker: @unchecked Sendable {
             .path
         let endpointPort = endpoint.port
         let dynamicResolution = channelOptions.dynamicResolution
-        let clipboardText = channelOptions.clipboardText
+        let clipboardEnabled = channelOptions.clipboardEnabled
+        let clipboardText = clipboardEnabled && channelOptions.clipboardText
+        let clipboardFormattedText = clipboardEnabled && channelOptions.clipboardFormattedText
+        let clipboardImages = clipboardEnabled && channelOptions.clipboardImages
+        let clipboardFiles = clipboardEnabled && channelOptions.clipboardFiles
+        let clipboardLocalToRemote = clipboardEnabled &&
+            channelOptions.clipboardDirection.allowsLocalToRemote
+        let clipboardRemoteToLocal = clipboardEnabled &&
+            channelOptions.clipboardDirection.allowsRemoteToLocal
         let audioPlayback = channelOptions.audioPlayback
         let microphoneRedirection = channelOptions.microphoneRedirection
         let microphoneDeviceName = microphoneRedirection
@@ -616,6 +1362,11 @@ private final class ConnectionWorker: @unchecked Sendable {
                                         certificateStorePath: storePath,
                                         dynamicResolution: dynamicResolution,
                                         clipboardText: clipboardText,
+                                        clipboardFormattedText: clipboardFormattedText,
+                                        clipboardImages: clipboardImages,
+                                        clipboardFiles: clipboardFiles,
+                                        clipboardLocalToRemote: clipboardLocalToRemote,
+                                        clipboardRemoteToLocal: clipboardRemoteToLocal,
                                         audioPlayback: audioPlayback,
                                         microphoneRedirection: microphoneRedirection,
                                         microphoneDeviceName: microphoneDeviceName.isEmpty
@@ -707,7 +1458,7 @@ private final class ConnectionWorker: @unchecked Sendable {
                 graphicsEventCallback,
                 Unmanaged.passUnretained(self).toOpaque()
             )
-            let clipboardResult = channelOptions.clipboardText
+            let clipboardResult = channelOptions.clipboardEnabled
                 ? FFRSessionSetClipboardEventCallback(
                     createdSession,
                     clipboardEventCallback,
@@ -779,6 +1530,7 @@ final class SessionCoordinator: ObservableObject {
     @Published private(set) var phase: SessionPhase = .idle
     @Published private(set) var certificateChallenge: CertificateChallenge?
     @Published private(set) var failure: ConnectionFailure?
+    @Published private(set) var clipboardTransferProgress: ClipboardTransferProgress?
 
     var onDesktopSizeChange: (@MainActor (RemoteDesktopSize) -> Void)?
     var onFrameUpdate: (@MainActor (
@@ -789,13 +1541,27 @@ final class SessionCoordinator: ObservableObject {
         UInt64
     ) -> Void)?
     var onCursorUpdate: (@MainActor (RemoteCursorUpdate) -> Void)?
-    var onClipboardTextReceived: (@MainActor (String) -> Void)?
+    var onClipboardContentReceived: (@MainActor (ClipboardPayloadSet) -> Void)?
+    var onClipboardFilesReceived: (@MainActor ([URL]) -> Void)?
+    var onClipboardFileTransferConfirmation: (@MainActor (
+        ClipboardFileTransferApproval,
+        @escaping @MainActor (Bool) -> Void
+    ) -> Void)?
     var onDynamicResolutionReady: (@MainActor () -> Void)?
-    var localClipboardTextProvider: (@MainActor () -> String?)?
+    var localClipboardContentProvider: (@MainActor () -> ClipboardPayloadSet)?
 
     private var stateMachine = SessionStateMachine()
     private var worker: ConnectionWorker?
     private var displayControlReady = false
+    private var remoteClipboardGeneration: UInt64 = 0
+    private var activeChannelOptions: ConnectionChannelOptions = .defaults
+    private var pendingRemoteClipboard: (
+        generation: UInt64,
+        remaining: [RemoteClipboardFormat],
+        payloads: ClipboardPayloadSet
+    )?
+    private var clipboardDataRequestToken: UInt64 = 0
+    private var completedRemoteFileGeneration: UInt64?
 
     var isActive: Bool {
         switch phase {
@@ -830,6 +1596,12 @@ final class SessionCoordinator: ObservableObject {
         certificateChallenge = nil
         failure = nil
         displayControlReady = false
+        remoteClipboardGeneration = 0
+        activeChannelOptions = channelOptions
+        pendingRemoteClipboard = nil
+        completedRemoteFileGeneration = nil
+        clipboardDataRequestToken &+= 1
+        clipboardTransferProgress = nil
 
         let worker = ConnectionWorker(
             id: id,
@@ -885,9 +1657,14 @@ final class SessionCoordinator: ObservableObject {
         worker?.sendInput(.monitorLayout(layouts))
     }
 
-    func publishClipboardText(_ text: String?) {
+    func publishClipboardContent(_ content: ClipboardPayloadSet) {
         guard phase == .connected else { return }
-        worker?.publishClipboardText(text)
+        worker?.publishClipboardContent(content)
+    }
+
+    func cancelClipboardFileTransfer() {
+        worker?.cancelClipboardFileTransfer()
+        clipboardTransferProgress = nil
     }
 
     private func handle(id: UUID, event: ConnectionWorkerEvent) {
@@ -918,9 +1695,124 @@ final class SessionCoordinator: ObservableObject {
         case let .cursor(update):
             onCursorUpdate?(update)
         case .clipboardReady:
-            worker?.publishClipboardText(localClipboardTextProvider?())
+            guard activeChannelOptions.clipboardDirection.allowsLocalToRemote else { break }
+            worker?.publishClipboardContent(localClipboardContentProvider?() ?? ClipboardPayloadSet())
         case let .clipboardText(text):
-            onClipboardTextReceived?(text)
+            // Kept for ABI compatibility. The generic data event owns delivery.
+            _ = text
+        case let .clipboardOffer(generation, formats):
+            FarframeLog.logger(for: .channel).info(
+                "Remote clipboard offer generation=\(generation, privacy: .public) recognizedFormats=\(formats.count, privacy: .public) kinds=\(formats.map { $0.kind.rawValue.description }.joined(separator: ","), privacy: .public)"
+            )
+            worker?.cancelRemoteFileDownload()
+            clipboardDataRequestToken &+= 1
+            remoteClipboardGeneration = generation
+            completedRemoteFileGeneration = nil
+            guard activeChannelOptions.clipboardEnabled,
+                  activeChannelOptions.clipboardDirection.allowsRemoteToLocal else {
+                pendingRemoteClipboard = nil
+                break
+            }
+            var selected: [RemoteClipboardFormat] = []
+            if activeChannelOptions.clipboardText,
+               let text = formats.first(where: { $0.kind == .unicodeText }) {
+                selected.append(text)
+            }
+            if activeChannelOptions.clipboardFormattedText {
+                if let html = formats.first(where: { $0.kind == .html }) { selected.append(html) }
+                if let rtf = formats.first(where: { $0.kind == .rtf }) { selected.append(rtf) }
+            }
+            if activeChannelOptions.clipboardImages {
+                if let image = formats.first(where: { $0.kind == .png }) ??
+                    formats.first(where: { $0.kind == .dibV5 }) ??
+                    formats.first(where: { $0.kind == .dib }) {
+                    selected.append(image)
+                }
+            }
+            if activeChannelOptions.clipboardFiles,
+               let files = formats.first(where: { $0.kind == .fileList }) {
+                selected.append(files)
+            }
+            pendingRemoteClipboard = (
+                generation: generation,
+                remaining: selected,
+                payloads: ClipboardPayloadSet()
+            )
+            if let first = selected.first {
+                worker?.requestClipboardData(generation: generation, format: first)
+                scheduleClipboardDataTimeout(generation: generation, format: first)
+            } else {
+                pendingRemoteClipboard = nil
+            }
+        case let .clipboardData(generation, kind, data):
+            FarframeLog.logger(for: .channel).info(
+                "Remote clipboard data generation=\(generation, privacy: .public) kind=\(kind.rawValue, privacy: .public) accepted=\(data != nil, privacy: .public) bytes=\(data?.count ?? 0, privacy: .public)"
+            )
+            guard generation == remoteClipboardGeneration,
+                  var pending = pendingRemoteClipboard,
+                  pending.generation == generation,
+                  pending.remaining.first?.kind == kind else {
+                break
+            }
+            if let data {
+                pending.payloads[kind] = data
+            }
+            clipboardDataRequestToken &+= 1
+            pending.remaining.removeFirst()
+            pendingRemoteClipboard = pending
+            if let next = pending.remaining.first {
+                worker?.requestClipboardData(generation: generation, format: next)
+                scheduleClipboardDataTimeout(generation: generation, format: next)
+            } else {
+                pendingRemoteClipboard = nil
+                var contentPayloads = pending.payloads
+                if let list = pending.payloads[.fileList],
+                   let files = ClipboardFileListCodec.decode(list) {
+                    contentPayloads[.fileList] = nil
+                    let approval = ClipboardFileTransferApproval(
+                        direction: .windowsToMac,
+                        fileCount: files.count,
+                        totalBytes: files.reduce(0) { $0 + $1.size }
+                    )
+                    let start: @MainActor (Bool) -> Void = { [weak self] approved in
+                        guard let self,
+                              approved,
+                              generation == self.remoteClipboardGeneration else { return }
+                        self.worker?.beginRemoteFileDownload(
+                            generation: generation,
+                            files: files
+                        )
+                    }
+                    if activeChannelOptions.confirmClipboardFiles {
+                        onClipboardFileTransferConfirmation?(approval, start)
+                    } else {
+                        start(true)
+                    }
+                }
+                if !contentPayloads.isEmpty {
+                    onClipboardContentReceived?(contentPayloads)
+                }
+            }
+        case let .clipboardFileApprovalRequested(approval):
+            guard let confirmation = onClipboardFileTransferConfirmation else {
+                worker?.resolveLocalFileTransferApproval(false)
+                break
+            }
+            confirmation(approval) { [weak self] approved in
+                self?.worker?.resolveLocalFileTransferApproval(approved)
+            }
+        case let .clipboardFilesReady(generation, urls):
+            guard generation == remoteClipboardGeneration else { break }
+            completedRemoteFileGeneration = generation
+            clipboardTransferProgress = nil
+            onClipboardFilesReceived?(urls)
+        case let .clipboardTransferProgress(generation, progress):
+            if let generation,
+               generation == completedRemoteFileGeneration,
+               progress != nil {
+                break
+            }
+            clipboardTransferProgress = progress
         case .displayControlReady:
             displayControlReady = true
             FarframeLog.logger(for: .session).info(
@@ -934,11 +1826,38 @@ final class SessionCoordinator: ObservableObject {
             transition(id: id, to: .failed)
         case .finished:
             worker = nil
+            pendingRemoteClipboard = nil
+            completedRemoteFileGeneration = nil
+            clipboardDataRequestToken &+= 1
+            clipboardTransferProgress = nil
             certificateChallenge = nil
             displayControlReady = false
             if stateMachine.finish(sessionID: id) {
                 phase = stateMachine.phase
             }
+        }
+    }
+
+    private func scheduleClipboardDataTimeout(
+        generation: UInt64,
+        format: RemoteClipboardFormat
+    ) {
+        clipboardDataRequestToken &+= 1
+        let token = clipboardDataRequestToken
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard let self,
+                  self.clipboardDataRequestToken == token,
+                  let pending = self.pendingRemoteClipboard,
+                  pending.generation == generation,
+                  pending.remaining.first == format else {
+                return
+            }
+            self.pendingRemoteClipboard = nil
+            self.clipboardDataRequestToken &+= 1
+            FarframeLog.logger(for: .session).error(
+                "Clipboard object request timed out; format=\(format.kind.rawValue, privacy: .public)"
+            )
         }
     }
 

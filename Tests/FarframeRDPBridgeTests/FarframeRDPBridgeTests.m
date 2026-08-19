@@ -27,7 +27,7 @@ static void RecordEvent(FFRSession *session, const FFREvent *event, void *userCo
 
 - (void)testBridgeAndFreeRDPVersions
 {
-    XCTAssertEqual(FFRBridgeABIVersion(), 11U);
+    XCTAssertEqual(FFRBridgeABIVersion(), 15U);
     XCTAssertEqual(strcmp(FFRFreeRDPVersion(), "3.30.0"), 0);
     XCTAssertTrue(strlen(FFRFreeRDPBuildRevision()) > 0);
 }

@@ -118,6 +118,18 @@ int main(void)
                                    sizeof(unterminatedClipboard)) == SIZE_MAX);
     assert(FFRClipboardUTF16Length((const BYTE *)terminatedClipboard, 1U) == SIZE_MAX);
     assert(FFRClipboardUTF16Length(NULL, sizeof(terminatedClipboard)) == SIZE_MAX);
+    FFRClipboardFormatKind mappedClipboardKind = 0;
+    const CLIPRDR_FORMAT remotePNG = {
+        .formatId = 0xC9A5U,
+        .formatName = "PNG",
+    };
+    assert(FFRClipboardRemoteFormat(&remotePNG, &mappedClipboardKind));
+    assert(mappedClipboardKind == FFR_CLIPBOARD_FORMAT_PNG);
+    const CLIPRDR_FORMAT untrustedNamedFormat = {
+        .formatId = 0xC9A6U,
+        .formatName = "image/unknown",
+    };
+    assert(!FFRClipboardRemoteFormat(&untrustedNamedFormat, &mappedClipboardKind));
     size_t validatedLength = 0U;
     assert(FFRValidateDesktopGeometry(1920U, 1080U, 7680U, &validatedLength));
     assert(validatedLength == 8294400U);
@@ -142,7 +154,7 @@ int main(void)
     assert(!FFRValidateCursorGeometry(UINT32_MAX, UINT32_MAX, 0U, 0U,
                                       &validatedLength));
 
-    assert(FFRBridgeABIVersion() == 11U);
+    assert(FFRBridgeABIVersion() == 15U);
     assert(strcmp(FFRFreeRDPVersion(), "3.30.0") == 0);
     assert(strlen(FFRFreeRDPBuildRevision()) > 0);
     assert(FFRBridgeLiveSessionCount() == 0U);
@@ -195,6 +207,77 @@ int main(void)
         assert(FFRSessionPublishClipboardText(session, &harmlessClipboardUnit,
                                               ((1024U * 1024U) / 2U)) ==
                FFR_RESULT_INVALID_ARGUMENT);
+        const uint16_t clipboardWireText[] = { 'o', 'k', 0U };
+        const FFRClipboardPayload clipboardPayload = {
+            .kind = FFR_CLIPBOARD_FORMAT_UNICODE_TEXT,
+            .bytes = (const uint8_t *)clipboardWireText,
+            .length = sizeof(clipboardWireText),
+        };
+        assert(FFRSessionPublishClipboardOffer(session, 10U, &clipboardPayload, 1U) ==
+               FFR_RESULT_OK);
+        assert(session->localClipboardGeneration == 10U);
+        assert(session->localClipboardPayloadCount == 1U);
+        assert(session->inputQueueCount == 1U);
+        assert(session->inputQueue[session->inputQueueHead].type ==
+               FFR_QUEUED_INPUT_CLIPBOARD_OFFER);
+        assert(FFRSessionPublishClipboardOffer(session, 10U, &clipboardPayload, 1U) ==
+               FFR_RESULT_INVALID_ARGUMENT);
+        const FFRClipboardPayload duplicatePayloads[] = {
+            clipboardPayload,
+            clipboardPayload,
+        };
+        assert(FFRSessionPublishClipboardOffer(session, 11U, duplicatePayloads, 2U) ==
+               FFR_RESULT_INVALID_ARGUMENT);
+        const FFRClipboardPayload unterminatedPayload = {
+            .kind = FFR_CLIPBOARD_FORMAT_UNICODE_TEXT,
+            .bytes = (const uint8_t *)unterminatedClipboard,
+            .length = sizeof(unterminatedClipboard),
+        };
+        assert(FFRSessionPublishClipboardOffer(session, 11U, &unterminatedPayload, 1U) ==
+               FFR_RESULT_INVALID_ARGUMENT);
+        session->inputQueueHead = 0U;
+        session->inputQueueCount = 0U;
+        session->remoteClipboardGeneration = 5U;
+        assert(FFRSessionRequestClipboardData(session, 5U, CF_UNICODETEXT,
+                                              FFR_CLIPBOARD_FORMAT_UNICODE_TEXT) ==
+               FFR_RESULT_OK);
+        assert(session->inputQueueCount == 1U);
+        assert(session->inputQueue[session->inputQueueHead].type ==
+               FFR_QUEUED_INPUT_CLIPBOARD_REQUEST);
+        assert(session->inputQueue[session->inputQueueHead].clipboardGeneration == 5U);
+        session->inputQueueHead = 0U;
+        session->inputQueueCount = 0U;
+        session->localFileRequests[0] = (FFRClipboardLocalFileRequest) {
+            .active = true,
+            .requestId = 77U,
+            .kind = FFR_CLIPBOARD_FILE_REQUEST_SIZE,
+            .requestedBytes = sizeof(uint64_t),
+        };
+        const uint64_t localFileSize = 42U;
+        assert(FFRSessionRespondLocalFileRequest(
+                   session, 77U, true, (const uint8_t *)&localFileSize,
+                   sizeof(localFileSize)) == FFR_RESULT_OK);
+        assert(session->inputQueueCount == 1U);
+        assert(session->inputQueue[session->inputQueueHead].type ==
+               FFR_QUEUED_INPUT_CLIPBOARD_FILE_RESPONSE);
+        assert(session->inputQueue[session->inputQueueHead].fileRequestId == 77U);
+        session->inputQueueHead = 0U;
+        session->inputQueueCount = 0U;
+        free(session->localFileRequests[0].responseBytes);
+        memset(&session->localFileRequests[0], 0,
+               sizeof(session->localFileRequests[0]));
+        assert(FFRSessionRequestRemoteFileContents(
+                   session, 5U, 9U, 0U, FFR_CLIPBOARD_FILE_REQUEST_RANGE,
+                   0U, FFR_MAX_CLIPBOARD_FILE_RANGE_BYTES + 1U) ==
+               FFR_RESULT_INVALID_ARGUMENT);
+        assert(FFRSessionRequestRemoteFileContents(
+                   session, 5U, 9U, 0U, FFR_CLIPBOARD_FILE_REQUEST_SIZE,
+                   0U, 0U) == FFR_RESULT_OK);
+        assert(session->inputQueueCount == 1U);
+        assert(session->inputQueue[session->inputQueueHead].type ==
+               FFR_QUEUED_INPUT_CLIPBOARD_FILE_REQUEST);
+        session->inputQueueHead = 0U;
+        session->inputQueueCount = 0U;
         assert(FFRSessionSendScanCode(session, 0x1EU, true, false) == FFR_RESULT_OK);
         assert(session->inputQueueCount == 1U);
         session->inputQueueHead = 0U;
@@ -243,6 +326,7 @@ int main(void)
             .certificateStorePath = "/tmp/farframe-rdp-native-tests",
             .dynamicResolution = true,
             .clipboardText = true,
+            .clipboardFiles = true,
             .audioPlayback = true,
             .microphoneRedirection = true,
             .microphoneDeviceName = "",
@@ -269,7 +353,10 @@ int main(void)
                                          FreeRDP_RedirectClipboard));
         assert(freerdp_settings_get_uint32(session->instance->context->settings,
                                            FreeRDP_ClipboardFeatureMask) ==
-               (CLIPRDR_FLAG_LOCAL_TO_REMOTE | CLIPRDR_FLAG_REMOTE_TO_LOCAL));
+               (CLIPRDR_FLAG_LOCAL_TO_REMOTE |
+                CLIPRDR_FLAG_LOCAL_TO_REMOTE_FILES |
+                CLIPRDR_FLAG_REMOTE_TO_LOCAL |
+                CLIPRDR_FLAG_REMOTE_TO_LOCAL_FILES));
         assert(freerdp_settings_get_bool(session->instance->context->settings,
                                          FreeRDP_AudioPlayback));
         assert(freerdp_settings_get_bool(session->instance->context->settings,

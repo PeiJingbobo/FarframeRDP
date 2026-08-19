@@ -166,8 +166,23 @@ struct ProfileReconnectOptions: Codable, Equatable, Sendable {
     }
 }
 
+enum ClipboardTransferDirection: String, Codable, CaseIterable, Sendable {
+    case bidirectional
+    case macToWindows
+    case windowsToMac
+
+    var allowsLocalToRemote: Bool { self != .windowsToMac }
+    var allowsRemoteToLocal: Bool { self != .macToWindows }
+}
+
 struct ProfileRedirectOptions: Codable, Equatable, Sendable {
+    var clipboardEnabled: Bool
     var clipboardText: Bool
+    var clipboardFormattedText: Bool
+    var clipboardImages: Bool
+    var clipboardFiles: Bool
+    var clipboardDirection: ClipboardTransferDirection
+    var confirmClipboardFiles: Bool
     var audioPlayback: Bool
     var microphoneRedirection: Bool
     var microphoneDeviceName: String
@@ -175,19 +190,69 @@ struct ProfileRedirectOptions: Codable, Equatable, Sendable {
     var redirectedDirectoryPath: String
 
     init(
+        clipboardEnabled: Bool = true,
         clipboardText: Bool = true,
+        clipboardFormattedText: Bool = false,
+        clipboardImages: Bool = false,
+        clipboardFiles: Bool = false,
+        clipboardDirection: ClipboardTransferDirection = .bidirectional,
+        confirmClipboardFiles: Bool = true,
         audioPlayback: Bool = true,
         microphoneRedirection: Bool = false,
         microphoneDeviceName: String = "",
         directoryRedirectionEnabled: Bool = false,
         redirectedDirectoryPath: String = ""
     ) {
+        self.clipboardEnabled = clipboardEnabled
         self.clipboardText = clipboardText
+        self.clipboardFormattedText = clipboardFormattedText
+        self.clipboardImages = clipboardImages
+        self.clipboardFiles = clipboardFiles
+        self.clipboardDirection = clipboardDirection
+        self.confirmClipboardFiles = confirmClipboardFiles
         self.audioPlayback = audioPlayback
         self.microphoneRedirection = microphoneRedirection
         self.microphoneDeviceName = microphoneDeviceName
         self.directoryRedirectionEnabled = directoryRedirectionEnabled
         self.redirectedDirectoryPath = redirectedDirectoryPath
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case clipboardEnabled
+        case clipboardText
+        case clipboardFormattedText
+        case clipboardImages
+        case clipboardFiles
+        case clipboardDirection
+        case confirmClipboardFiles
+        case audioPlayback
+        case microphoneRedirection
+        case microphoneDeviceName
+        case directoryRedirectionEnabled
+        case redirectedDirectoryPath
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        clipboardText = try values.decodeIfPresent(Bool.self, forKey: .clipboardText) ?? true
+        clipboardEnabled = try values.decodeIfPresent(Bool.self, forKey: .clipboardEnabled) ?? clipboardText
+        // Existing profiles must remain text-only after upgrading.
+        clipboardFormattedText = try values.decodeIfPresent(Bool.self, forKey: .clipboardFormattedText) ?? false
+        clipboardImages = try values.decodeIfPresent(Bool.self, forKey: .clipboardImages) ?? false
+        clipboardFiles = try values.decodeIfPresent(Bool.self, forKey: .clipboardFiles) ?? false
+        clipboardDirection = try values.decodeIfPresent(
+            ClipboardTransferDirection.self,
+            forKey: .clipboardDirection
+        ) ?? .bidirectional
+        confirmClipboardFiles = try values.decodeIfPresent(Bool.self, forKey: .confirmClipboardFiles) ?? true
+        audioPlayback = try values.decodeIfPresent(Bool.self, forKey: .audioPlayback) ?? true
+        microphoneRedirection = try values.decodeIfPresent(Bool.self, forKey: .microphoneRedirection) ?? false
+        microphoneDeviceName = try values.decodeIfPresent(String.self, forKey: .microphoneDeviceName) ?? ""
+        directoryRedirectionEnabled = try values.decodeIfPresent(
+            Bool.self,
+            forKey: .directoryRedirectionEnabled
+        ) ?? false
+        redirectedDirectoryPath = try values.decodeIfPresent(String.self, forKey: .redirectedDirectoryPath) ?? ""
     }
 
     var enabledDirectoryPath: String? {
@@ -351,7 +416,13 @@ struct ConnectionProfileDraft: Equatable, Sendable {
             // toolbar changes between fixed resolutions.
             dynamicResolution: true,
             monitorSelection: desktopOptions.monitorSelection,
+            clipboardEnabled: redirectOptions.clipboardEnabled,
             clipboardText: redirectOptions.clipboardText,
+            clipboardFormattedText: redirectOptions.clipboardFormattedText,
+            clipboardImages: redirectOptions.clipboardImages,
+            clipboardFiles: redirectOptions.clipboardFiles,
+            clipboardDirection: redirectOptions.clipboardDirection,
+            confirmClipboardFiles: redirectOptions.confirmClipboardFiles,
             audioPlayback: redirectOptions.audioPlayback,
             microphoneRedirection: redirectOptions.microphoneRedirection,
             microphoneDeviceName: redirectOptions.microphoneDeviceName,
