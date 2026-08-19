@@ -27,7 +27,7 @@ static void RecordEvent(FFRSession *session, const FFREvent *event, void *userCo
 
 - (void)testBridgeAndFreeRDPVersions
 {
-    XCTAssertEqual(FFRBridgeABIVersion(), 10U);
+    XCTAssertEqual(FFRBridgeABIVersion(), 11U);
     XCTAssertEqual(strcmp(FFRFreeRDPVersion(), "3.30.0"), 0);
     XCTAssertTrue(strlen(FFRFreeRDPBuildRevision()) > 0);
 }
@@ -91,6 +91,7 @@ static void RecordEvent(FFRSession *session, const FFREvent *event, void *userCo
         .gatewayPassword = NULL,
     };
     XCTAssertEqual(FFRSessionConfigure(session, &valid), FFR_RESULT_OK);
+    XCTAssertTrue(FFRSessionGraphicsPipelineRequested(session));
     XCTAssertEqual(FFRSessionResolveCertificate(session, FFR_CERTIFICATE_REJECT),
                    FFR_RESULT_INVALID_STATE);
 
@@ -139,6 +140,7 @@ static void RecordEvent(FFRSession *session, const FFREvent *event, void *userCo
         .gatewayPassword = NULL,
     };
     XCTAssertEqual(FFRSessionConfigure(session, &valid), FFR_RESULT_OK);
+    XCTAssertTrue(FFRSessionGraphicsPipelineRequested(session));
     XCTAssertEqual(strcmp(
                        FFRConnectionFailureDescription(
                            FFR_CONNECTION_FAILURE_GATEWAY_AUTHENTICATION),
@@ -193,6 +195,7 @@ static void RecordEvent(FFRSession *session, const FFREvent *event, void *userCo
         .remoteAppWorkingDirectory = "",
     };
     XCTAssertEqual(FFRSessionConfigure(session, &valid), FFR_RESULT_OK);
+    XCTAssertFalse(FFRSessionGraphicsPipelineRequested(session));
 
     FFRConnectionSettings invalid = valid;
     invalid.remoteAppProgram = "";

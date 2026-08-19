@@ -542,6 +542,7 @@
 					AudioToolbox,
 					"-framework",
 					AVFoundation,
+					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp;
 				PRODUCT_NAME = FarframeRDP;
@@ -585,6 +586,7 @@
 					AudioToolbox,
 					"-framework",
 					AVFoundation,
+					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp;
 				PRODUCT_NAME = FarframeRDP;
@@ -628,6 +630,7 @@
 					AudioToolbox,
 					"-framework",
 					AVFoundation,
+					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp;
 				PRODUCT_NAME = FarframeRDP;
@@ -815,6 +818,7 @@
 					AudioToolbox,
 					"-framework",
 					AVFoundation,
+					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.bridge.tests;
 				PRODUCT_NAME = FarframeRDPBridgeTests;
@@ -850,6 +854,7 @@
 					AudioToolbox,
 					"-framework",
 					AVFoundation,
+					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.bridge.tests;
 				PRODUCT_NAME = FarframeRDPBridgeTests;
@@ -885,6 +890,7 @@
 					AudioToolbox,
 					"-framework",
 					AVFoundation,
+					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.bridge.tests;
 				PRODUCT_NAME = FarframeRDPBridgeTests;

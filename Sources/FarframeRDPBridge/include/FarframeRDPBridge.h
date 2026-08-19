@@ -288,6 +288,13 @@ FFRResult FFRSessionConnect(FFRSession *session);
 /// Returns the protocol selected by the completed FreeRDP negotiation.
 FFRSecurityProtocol FFRSessionNegotiatedSecurityProtocol(const FFRSession *session);
 
+/// Reports whether this configured session requests the RDP Graphics Pipeline.
+/// Full desktop sessions request RDPGFX with Progressive and AVC codecs;
+/// RemoteApp sessions keep the legacy graphics path until window-surface mapping
+/// is integrated. Call this read-only diagnostic on the session owner thread; it
+/// exposes no FreeRDP pointer.
+bool FFRSessionGraphicsPipelineRequested(const FFRSession *session);
+
 /// Atomically requests cancellation and wakes FreeRDP. May run on any thread
 /// while the caller guarantees that the session remains alive.
 FFRResult FFRSessionRequestCancellation(FFRSession *session);

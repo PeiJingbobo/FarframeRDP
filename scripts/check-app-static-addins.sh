@@ -31,6 +31,7 @@ drive_DeviceServiceEntry
 mac_freerdp_audin_client_subsystem_entry
 mac_freerdp_rdpsnd_client_subsystem_entry
 rail_VirtualChannelEntryEx
+rdpgfx_DVCPluginEntry
 rdpdr_VirtualChannelEntryEx
 rdpsnd_DVCPluginEntry
 rdpsnd_VirtualChannelEntryEx

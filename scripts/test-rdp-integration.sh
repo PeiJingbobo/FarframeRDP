@@ -67,6 +67,7 @@ macos_sdk=$(xcrun --sdk macosx --show-sdk-path)
     -framework CoreAudio \
     -framework AudioToolbox \
     -framework AVFoundation \
+    -lc++ \
     -o "$test_binary"
 
 FARFRAME_TEST_HOST="$host" \

@@ -5,6 +5,7 @@
 
 #include <freerdp/client/cliprdr.h>
 #include <freerdp/client/disp.h>
+#include <freerdp/client/rdpgfx.h>
 #include <freerdp/freerdp.h>
 #include <winpr/synch.h>
 
@@ -99,6 +100,8 @@ struct FFRSession {
     DispClientContext *displayControl;
     bool dynamicResolutionEnabled;
     bool displayControlActivated;
+    RdpgfxClientContext *graphicsPipeline;
+    bool graphicsPipelineActive;
     bool hasPendingResize;
     uint32_t pendingResizeWidth;
     uint32_t pendingResizeHeight;

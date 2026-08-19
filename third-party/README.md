@@ -12,7 +12,8 @@ Homebrew 安装。
 - 构建架构、产物形式和复现命令；
 - 是否进入最终二进制及对应验证方法。
 
-许可证原文放入 `third-party/licenses/`。当前实际静态链接 FreeRDP/WinPR 3.30.0 和 OpenSSL 3.5.7；
+许可证原文放入 `third-party/licenses/`。当前实际静态链接 FreeRDP/WinPR 3.30.0、OpenSSL 3.5.7
+和 OpenH264 2.6.0；
 精确提交见 `versions.sh`，能力与安全决策见
 `docs/task/phase-2-native-dependency-decision.md`，验证与链接审计见
 `docs/task/phase-2-validation.md`。

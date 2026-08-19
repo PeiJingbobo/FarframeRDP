@@ -5,6 +5,8 @@
 #include <freerdp/channels/cliprdr.h>
 #include <freerdp/channels/disp.h>
 #include <freerdp/codec/color.h>
+#include <freerdp/channels/rdpgfx.h>
+#include <freerdp/gdi/gfx.h>
 #include <freerdp/event.h>
 #include <freerdp/gdi/gdi.h>
 #include <freerdp/graphics.h>
@@ -24,7 +26,7 @@ static const void *volatile g_staticChannelAddinAnchor = NULL;
 /*
  * FreeRDP's macOS build produces static channel addins in the aggregate native
  * archive. The addin loader discovers them through generated tables at runtime,
- * so the app binary has no direct call edge to cliprdr/disp/rdpsnd/rdpdr/drive
+ * so the app binary has no direct call edge to cliprdr/disp/rdpgfx/rdpsnd/rdpdr/drive
  * entry points. Without this anchor, Xcode's static archive linking can discard
  * every unreferenced channel object: settings still say "clipboard/audio/drive
  * enabled", but the final .app has no addin symbols to load.
@@ -37,6 +39,7 @@ extern void disp_DVCPluginEntry(void);
 extern void drdynvc_VirtualChannelEntryEx(void);
 extern void drive_DeviceServiceEntry(void);
 extern void mac_freerdp_rdpsnd_client_subsystem_entry(void);
+extern void rdpgfx_DVCPluginEntry(void);
 extern void rdpdr_VirtualChannelEntryEx(void);
 extern void rdpsnd_DVCPluginEntry(void);
 extern void rdpsnd_VirtualChannelEntryEx(void);
@@ -118,6 +121,7 @@ static bool FFRRegisterChannelAddins(void)
         (const void *)drdynvc_VirtualChannelEntryEx,
         (const void *)drive_DeviceServiceEntry,
         (const void *)mac_freerdp_rdpsnd_client_subsystem_entry,
+        (const void *)rdpgfx_DVCPluginEntry,
         (const void *)rdpdr_VirtualChannelEntryEx,
         (const void *)rdpsnd_DVCPluginEntry,
         (const void *)rdpsnd_VirtualChannelEntryEx,
@@ -664,6 +668,18 @@ static void FFROnChannelConnected(void *context, const ChannelConnectedEventArgs
     }
     FFRRdpContext *farframeContext = (FFRRdpContext *)context;
     FFRSession *session = farframeContext->session;
+    if (strcmp(event->name, RDPGFX_DVC_CHANNEL_NAME) == 0) {
+        RdpgfxClientContext *graphicsPipeline =
+            (RdpgfxClientContext *)event->pInterface;
+        if (session != NULL && graphicsPipeline != NULL &&
+            farframeContext->base.gdi != NULL &&
+            gdi_graphics_pipeline_init(farframeContext->base.gdi,
+                                       graphicsPipeline)) {
+            session->graphicsPipeline = graphicsPipeline;
+            session->graphicsPipelineActive = true;
+        }
+        return;
+    }
     if (session != NULL && strcmp(event->name, DISP_DVC_CHANNEL_NAME) == 0) {
         session->displayControl = (DispClientContext *)event->pInterface;
         if (session->displayControl != NULL) {
@@ -698,6 +714,20 @@ static void FFROnChannelDisconnected(void *context, const ChannelDisconnectedEve
     }
     FFRRdpContext *farframeContext = (FFRRdpContext *)context;
     FFRSession *session = farframeContext->session;
+    if (strcmp(event->name, RDPGFX_DVC_CHANNEL_NAME) == 0) {
+        RdpgfxClientContext *graphicsPipeline =
+            (RdpgfxClientContext *)event->pInterface;
+        if (session != NULL && graphicsPipeline == session->graphicsPipeline) {
+            if (session->graphicsPipelineActive &&
+                farframeContext->base.gdi != NULL) {
+                gdi_graphics_pipeline_uninit(farframeContext->base.gdi,
+                                             graphicsPipeline);
+            }
+            session->graphicsPipeline = NULL;
+            session->graphicsPipelineActive = false;
+        }
+        return;
+    }
     if (session != NULL && strcmp(event->name, DISP_DVC_CHANNEL_NAME) == 0) {
         if (session->displayControl != NULL) {
             session->displayControl->custom = NULL;
@@ -961,7 +991,7 @@ void FFREmitClipboardEvent(FFRSession *session, const FFRClipboardEvent *event)
 
 uint32_t FFRBridgeABIVersion(void)
 {
-    return 10U;
+    return 11U;
 }
 
 const char *FFRFreeRDPVersion(void)

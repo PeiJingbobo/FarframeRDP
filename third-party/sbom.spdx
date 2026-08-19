@@ -37,8 +37,20 @@ PackageLicenseDeclared: Apache-2.0
 PackageCopyrightText: NOASSERTION
 ExternalRef: PACKAGE-MANAGER purl pkg:github/openssl/openssl@8cf17aaeb4599f8af87fefd810b5b5fee90fe69e
 
+PackageName: OpenH264
+SPDXID: SPDXRef-Package-OpenH264
+PackageVersion: 2.6.0
+PackageDownloadLocation: git+https://github.com/cisco/openh264.git@652bdb7719f30b52b08e506645a7322ff1b2cc6f
+FilesAnalyzed: false
+PackageLicenseConcluded: BSD-2-Clause
+PackageLicenseDeclared: BSD-2-Clause
+PackageCopyrightText: Copyright (c) 2013, Cisco Systems
+ExternalRef: PACKAGE-MANAGER purl pkg:github/cisco/openh264@652bdb7719f30b52b08e506645a7322ff1b2cc6f
+
 Relationship: SPDXRef-DOCUMENT DESCRIBES SPDXRef-Package-FreeRDP
 Relationship: SPDXRef-DOCUMENT DESCRIBES SPDXRef-Package-WinPR
 Relationship: SPDXRef-DOCUMENT DESCRIBES SPDXRef-Package-OpenSSL
+Relationship: SPDXRef-DOCUMENT DESCRIBES SPDXRef-Package-OpenH264
 Relationship: SPDXRef-Package-FreeRDP DEPENDS_ON SPDXRef-Package-WinPR
 Relationship: SPDXRef-Package-FreeRDP DEPENDS_ON SPDXRef-Package-OpenSSL
+Relationship: SPDXRef-Package-FreeRDP DEPENDS_ON SPDXRef-Package-OpenH264

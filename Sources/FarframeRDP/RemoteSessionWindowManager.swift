@@ -11,6 +11,18 @@ enum FixedResolutionViewportPolicy {
     }
 }
 
+enum RemoteDocumentAlignmentPolicy {
+    static func topLeftBoundsOrigin(
+        documentFrame: CGRect,
+        viewportSize: CGSize
+    ) -> CGPoint {
+        CGPoint(
+            x: documentFrame.minX,
+            y: documentFrame.maxY - viewportSize.height
+        )
+    }
+}
+
 enum RemoteWindowChromeMetrics {
     static let reservedTopHeight: CGFloat = 40
     static let horizontalContentInset: CGFloat = 0
@@ -33,6 +45,24 @@ enum RemoteWindowChromeMetrics {
             width: max(0, contentSize.width - horizontalContentInset * 2),
             height: max(0, contentSize.height - reservedTopHeight - bottomContentInset)
         )
+    }
+}
+
+struct RemoteSessionWindowIdentity: Equatable, Sendable {
+    let displayName: String
+    let host: String
+    let port: UInt16
+
+    var address: String {
+        guard port != 3389 else { return host }
+        let formattedHost = host.contains(":") && !host.hasPrefix("[")
+            ? "[\(host)]"
+            : host
+        return "\(formattedHost):\(port)"
+    }
+
+    var title: String {
+        "\(displayName)-\(address)"
     }
 }
 
@@ -67,10 +97,147 @@ private final class FloatingRemoteToolbarView: NSView {
 }
 
 @MainActor
+private final class TopLeftRemoteClipView: NSClipView {
+    override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+        var constrainedBounds = super.constrainBoundsRect(proposedBounds)
+        guard let documentView else { return constrainedBounds }
+        let topLeftOrigin = RemoteDocumentAlignmentPolicy.topLeftBoundsOrigin(
+            documentFrame: documentView.frame,
+            viewportSize: constrainedBounds.size
+        )
+        if documentView.frame.width <= constrainedBounds.width {
+            constrainedBounds.origin.x = topLeftOrigin.x
+        }
+        if documentView.frame.height <= constrainedBounds.height {
+            constrainedBounds.origin.y = topLeftOrigin.y
+        }
+        return constrainedBounds
+    }
+
+    func scrollToDocumentTopLeft() {
+        guard let documentView else { return }
+        scroll(
+            to: RemoteDocumentAlignmentPolicy.topLeftBoundsOrigin(
+                documentFrame: documentView.frame,
+                viewportSize: bounds.size
+            )
+        )
+    }
+}
+
+@MainActor
+final class PersistentRemoteScroller: NSScroller {
+    static let persistentKnobOpacity: CGFloat = 0.9
+
+    override var alphaValue: CGFloat {
+        get { super.alphaValue }
+        set { super.alphaValue = 1 }
+    }
+
+    var renderedKnobRect: NSRect {
+        rect(for: .knob)
+    }
+
+    func capturesKnob(at point: NSPoint) -> Bool {
+        renderedKnobRect.contains(point)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let knobRect = renderedKnobRect
+        guard !knobRect.isEmpty else { return }
+        let knobPath = NSBezierPath(
+            roundedRect: knobRect,
+            xRadius: min(knobRect.width, knobRect.height) / 2,
+            yRadius: min(knobRect.width, knobRect.height) / 2
+        )
+        NSColor.white.withAlphaComponent(Self.persistentKnobOpacity).setFill()
+        knobPath.fill()
+        NSColor.black.withAlphaComponent(0.35).setStroke()
+        knobPath.lineWidth = 1
+        knobPath.stroke()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden, alphaValue > 0 else { return nil }
+        let localPoint = convert(point, from: superview)
+        return capturesKnob(at: localPoint) ? self : nil
+    }
+}
+
+@MainActor
+final class PersistentRemoteScrollView: NSScrollView {
+    private let persistentHorizontalScroller = PersistentRemoteScroller(frame: .zero)
+    private let persistentVerticalScroller = PersistentRemoteScroller(frame: .zero)
+
+    private(set) var showsPersistentHorizontalScroller = false
+    private(set) var showsPersistentVerticalScroller = false
+
+    var visiblePersistentScrollers: [PersistentRemoteScroller] {
+        [persistentHorizontalScroller, persistentVerticalScroller]
+            .filter { !$0.isHidden }
+    }
+
+    var persistentScrollersOverlapContentView: Bool {
+        !visiblePersistentScrollers.isEmpty
+            && visiblePersistentScrollers.allSatisfy {
+                contentView.frame.intersects($0.frame)
+            }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        configurePersistentScrollers()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configurePersistentScrollers()
+    }
+
+    func setPersistentScrollersVisible(horizontal: Bool, vertical: Bool) {
+        showsPersistentHorizontalScroller = horizontal
+        showsPersistentVerticalScroller = vertical
+        hasHorizontalScroller = horizontal
+        hasVerticalScroller = vertical
+        autohidesScrollers = false
+        tile()
+        reflectScrolledClipView(contentView)
+    }
+
+    override func tile() {
+        super.tile()
+        // AppKit forces always-visible scrollers to the legacy style. Expand
+        // the clip view beneath those native controls so they overlay the
+        // remote canvas without surrendering NSScrollView's drag handling.
+        contentView.frame = bounds
+        if let horizontalScroller, hasHorizontalScroller {
+            addSubview(horizontalScroller, positioned: .above, relativeTo: contentView)
+        }
+        if let verticalScroller, hasVerticalScroller {
+            addSubview(verticalScroller, positioned: .above, relativeTo: contentView)
+        }
+    }
+
+    private func configurePersistentScrollers() {
+        contentView = TopLeftRemoteClipView()
+        scrollerStyle = .legacy
+        autohidesScrollers = false
+        horizontalScroller = persistentHorizontalScroller
+        verticalScroller = persistentVerticalScroller
+        persistentHorizontalScroller.knobStyle = .light
+        persistentVerticalScroller.knobStyle = .light
+        hasHorizontalScroller = false
+        hasVerticalScroller = false
+    }
+}
+
+@MainActor
 private final class RemoteSessionContainerView: NSView {
     private let floatingToolbar: NSView
     private let chromeMaterialView = NSVisualEffectView()
     private var toolbarHeightConstraint: NSLayoutConstraint!
+    private var toolbarCenterYConstraint: NSLayoutConstraint!
     private var hoverTrackingArea: NSTrackingArea?
     private(set) var isFloatingToolbarVisible = false
 
@@ -106,8 +273,8 @@ private final class RemoteSessionContainerView: NSView {
     }
 
     var standardWindowButtonVerticalOffsets: [CGFloat] {
-        let toolbarCenterInWindow = convert(
-            NSPoint(x: bounds.midX, y: targetToolbarCenterY),
+        let toolbarCenterInWindow = floatingToolbar.convert(
+            NSPoint(x: floatingToolbar.bounds.midX, y: floatingToolbar.bounds.midY),
             to: nil
         ).y
         return standardWindowButtons.map { button in
@@ -119,7 +286,34 @@ private final class RemoteSessionContainerView: NSView {
         }
     }
 
-    init(scrollView: NSScrollView, floatingToolbar: NSView) {
+    var standardWindowButtonCenterYs: [CGFloat] {
+        standardWindowButtons.compactMap { button in
+            button.superview?.convert(
+                NSPoint(x: button.frame.midX, y: button.frame.midY),
+                to: nil
+            ).y
+        }
+    }
+
+    var titlebarElementVerticalOffsets: [CGFloat] {
+        guard let referenceButton = standardWindowButtons.first,
+              let referenceSuperview = referenceButton.superview else {
+            return []
+        }
+        let referenceCenterInWindow = referenceSuperview.convert(
+            NSPoint(x: referenceButton.frame.midX, y: referenceButton.frame.midY),
+            to: nil
+        ).y
+        return floatingToolbar.subviews.map { view in
+            let centerInWindow = view.convert(
+                NSPoint(x: view.bounds.midX, y: view.bounds.midY),
+                to: nil
+            ).y
+            return centerInWindow - referenceCenterInWindow
+        }
+    }
+
+    init(scrollView: PersistentRemoteScrollView, floatingToolbar: NSView) {
         self.floatingToolbar = floatingToolbar
         super.init(frame: scrollView.frame)
 
@@ -143,6 +337,9 @@ private final class RemoteSessionContainerView: NSView {
         addSubview(floatingToolbar)
 
         toolbarHeightConstraint = floatingToolbar.heightAnchor.constraint(equalToConstant: 0)
+        toolbarCenterYConstraint = floatingToolbar.centerYAnchor.constraint(
+            equalTo: bottomAnchor
+        )
         NSLayoutConstraint.activate([
             chromeMaterialView.leadingAnchor.constraint(equalTo: leadingAnchor),
             chromeMaterialView.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -166,12 +363,10 @@ private final class RemoteSessionContainerView: NSView {
             ),
             floatingToolbar.leadingAnchor.constraint(equalTo: leadingAnchor),
             floatingToolbar.trailingAnchor.constraint(equalTo: trailingAnchor),
-            floatingToolbar.bottomAnchor.constraint(
-                equalTo: scrollView.topAnchor,
-                constant: RemoteWindowChromeMetrics.toolbarCanvasGap
-            ),
+            toolbarCenterYConstraint,
             toolbarHeightConstraint,
         ])
+
     }
 
     @available(*, unavailable)
@@ -183,12 +378,12 @@ private final class RemoteSessionContainerView: NSView {
         super.viewDidMoveToWindow()
         window?.acceptsMouseMovedEvents = true
         setFloatingToolbarVisible(false, animated: false)
-        centerStandardWindowButtonsInToolbar()
+        alignFloatingToolbarWithStandardWindowButtons()
     }
 
     override func layout() {
         super.layout()
-        centerStandardWindowButtonsInToolbar()
+        alignFloatingToolbarWithStandardWindowButtons()
     }
 
     override func updateTrackingAreas() {
@@ -280,38 +475,30 @@ private final class RemoteSessionContainerView: NSView {
     }
 
     private func setStandardWindowButtonsVisible(_ visible: Bool, alpha: CGFloat) {
-        centerStandardWindowButtonsInToolbar()
+        alignFloatingToolbarWithStandardWindowButtons()
         for button in standardWindowButtons {
             button.isHidden = !visible
             button.alphaValue = alpha
         }
     }
 
-    private var targetToolbarCenterY: CGFloat {
-        bounds.maxY
-            - RemoteWindowChromeMetrics.reservedTopHeight
-            + RemoteWindowChromeMetrics.toolbarCanvasGap
-            + RemoteWindowChromeMetrics.toolbarHeight / 2
-    }
-
-    private func centerStandardWindowButtonsInToolbar() {
-        guard window != nil else { return }
-        let toolbarCenterInWindow = convert(
-            NSPoint(x: bounds.midX, y: targetToolbarCenterY),
-            to: nil
-        ).y
-        for button in standardWindowButtons {
-            guard let buttonSuperview = button.superview else { continue }
-            let centerInSuperview = buttonSuperview.convert(
-                NSPoint(x: 0, y: toolbarCenterInWindow),
-                from: nil
-            ).y
-            var frame = button.frame
-            let targetOriginY = round(centerInSuperview - frame.height / 2)
-            guard abs(frame.origin.y - targetOriginY) > 0.5 else { continue }
-            frame.origin.y = targetOriginY
-            button.setFrameOrigin(frame.origin)
+    private func alignFloatingToolbarWithStandardWindowButtons() {
+        let targetCenterY: CGFloat
+        if let referenceButton = standardWindowButtons.first,
+           let referenceSuperview = referenceButton.superview {
+            let centerInWindow = referenceSuperview.convert(
+                NSPoint(x: referenceButton.frame.midX, y: referenceButton.frame.midY),
+                to: nil
+            )
+            targetCenterY = convert(centerInWindow, from: nil).y
+        } else {
+            targetCenterY = bounds.maxY
+                - RemoteWindowChromeMetrics.reservedTopHeight / 2
         }
+
+        let targetConstant = -(targetCenterY - bounds.minY)
+        guard abs(toolbarCenterYConstraint.constant - targetConstant) > 0.5 else { return }
+        toolbarCenterYConstraint.constant = targetConstant
     }
 }
 
@@ -362,7 +549,7 @@ extension ShortcutCaptureStatus {
 final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     private var remoteWindowController: NSWindowController?
     private var remoteCanvas: RemoteCanvasView?
-    private var remoteScrollView: NSScrollView?
+    private var remoteScrollView: PersistentRemoteScrollView?
     private var remoteContainerView: RemoteSessionContainerView?
     private var pendingDesktopSize: RemoteDesktopSize?
     private var requestedInitialViewportAfterWindowReady = false
@@ -372,6 +559,7 @@ final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDele
     private var displayActivationRetryTask: Task<Void, Never>?
     private weak var captureToolbarButton: NSButton?
     private weak var resolutionToolbarButton: NSPopUpButton?
+    private weak var sessionTitleLabel: NSTextField?
     var displayActivationRetryDelay: Duration = .milliseconds(500)
     @Published private(set) var shortcutCaptureStatus: ShortcutCaptureStatus = .inactive
     var onWindowClosed: (@MainActor () -> Void)?
@@ -404,6 +592,17 @@ final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDele
     var sessionIsConnected = false {
         didSet { remoteCanvas?.sessionIsConnected = sessionIsConnected }
     }
+    var sessionIdentity: RemoteSessionWindowIdentity? {
+        didSet {
+            let title = displayedSessionTitle
+            remoteWindowController?.window?.title = title
+            sessionTitleLabel?.stringValue = title
+        }
+    }
+
+    var displayedSessionTitle: String {
+        sessionIdentity?.title ?? String(localized: "远程会话")
+    }
 
     var hasOpenRemoteWindow: Bool {
         remoteWindowController?.window?.isVisible == true
@@ -426,7 +625,7 @@ final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDele
     }
 
     var usesOverlayRemoteScrollers: Bool {
-        remoteScrollView?.scrollerStyle == .overlay
+        remoteScrollView?.persistentScrollersOverlapContentView == true
     }
 
     var remoteViewportBackgroundIsTransparent: Bool {
@@ -485,12 +684,32 @@ final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDele
         remoteContainerView?.standardWindowButtonVerticalOffsets ?? []
     }
 
+    var standardWindowButtonCenterYs: [CGFloat] {
+        remoteContainerView?.standardWindowButtonCenterYs ?? []
+    }
+
+    var titlebarElementVerticalOffsets: [CGFloat] {
+        remoteContainerView?.titlebarElementVerticalOffsets ?? []
+    }
+
+    var remoteWindowTitle: String? {
+        remoteWindowController?.window?.title
+    }
+
+    var displayedToolbarTitle: String? {
+        sessionTitleLabel?.stringValue
+    }
+
     var remoteCanvasSize: CGSize? {
         remoteCanvas?.frame.size
     }
 
     var remoteViewportSize: CGSize? {
         remoteScrollView?.contentSize
+    }
+
+    var remoteViewportBounds: CGRect? {
+        remoteScrollView?.contentView.bounds
     }
 
     func resizeRemoteWindow(to contentSize: CGSize) {
@@ -507,11 +726,11 @@ final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDele
     }
 
     var hasHorizontalRemoteScroller: Bool {
-        remoteScrollView?.hasHorizontalScroller == true
+        remoteScrollView?.showsPersistentHorizontalScroller == true
     }
 
     var hasVerticalRemoteScroller: Bool {
-        remoteScrollView?.hasVerticalScroller == true
+        remoteScrollView?.showsPersistentVerticalScroller == true
     }
 
     var horizontalRemoteScrollerKnobProportion: CGFloat? {
@@ -520,6 +739,52 @@ final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDele
 
     var verticalRemoteScrollerKnobProportion: CGFloat? {
         remoteScrollView?.verticalScroller?.knobProportion
+    }
+
+    var remoteScrollerAlphaValues: [CGFloat] {
+        remoteScrollView?.visiblePersistentScrollers.map(\.alphaValue) ?? []
+    }
+
+    var usesPersistentRemoteScrollers: Bool {
+        guard let scrollView = remoteScrollView else { return false }
+        return scrollView.horizontalScroller is PersistentRemoteScroller
+            && scrollView.verticalScroller is PersistentRemoteScroller
+    }
+
+    var remoteScrollersAreManagedByScrollView: Bool {
+        guard let scrollView = remoteScrollView,
+              let horizontalScroller = scrollView.horizontalScroller,
+              let verticalScroller = scrollView.verticalScroller else { return false }
+        return horizontalScroller.superview === scrollView
+            && verticalScroller.superview === scrollView
+    }
+
+    var usesNativeRemoteScrollers: Bool {
+        guard let scrollbars = remoteScrollView?.visiblePersistentScrollers,
+              !scrollbars.isEmpty else { return false }
+        return scrollbars.allSatisfy {
+            $0.scrollerStyle == .legacy && $0.knobStyle == .light
+        }
+    }
+
+    var remoteScrollerFrames: [CGRect] {
+        remoteScrollView?.visiblePersistentScrollers.map(\.frame) ?? []
+    }
+
+    var remoteScrollersOverlapCanvasViewport: Bool {
+        remoteScrollView?.persistentScrollersOverlapContentView == true
+    }
+
+    var remoteScrollerKnobRects: [CGRect] {
+        remoteScrollView?.visiblePersistentScrollers.map(\.renderedKnobRect) ?? []
+    }
+
+    var remoteScrollersHaveNativeActions: Bool {
+        guard let scrollbars = remoteScrollView?.visiblePersistentScrollers,
+              !scrollbars.isEmpty else { return false }
+        return scrollbars.allSatisfy {
+            $0.isEnabled && $0.target != nil && $0.action != nil
+        }
     }
 
     func openRemoteWindow() {
@@ -551,14 +816,14 @@ final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDele
         if let pendingDesktopSize {
             canvas.announceDesktopSize(pendingDesktopSize)
         }
-        let scrollView = NSScrollView(frame: canvas.frame)
+        let scrollView = PersistentRemoteScrollView(frame: canvas.frame)
         scrollView.drawsBackground = false
         scrollView.backgroundColor = .clear
         scrollView.borderType = .noBorder
-        scrollView.hasHorizontalScroller = true
-        scrollView.hasVerticalScroller = true
-        scrollView.autohidesScrollers = true
-        scrollView.scrollerStyle = .overlay
+        scrollView.hasHorizontalScroller = false
+        scrollView.hasVerticalScroller = false
+        scrollView.autohidesScrollers = false
+        scrollView.scrollerStyle = .legacy
         scrollView.documentView = canvas
         remoteScrollView = scrollView
 
@@ -578,7 +843,7 @@ final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDele
             backing: .buffered,
             defer: false
         )
-        window.title = String(localized: "远程会话")
+        window.title = displayedSessionTitle
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
@@ -707,13 +972,14 @@ final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDele
         toolbar.wantsLayer = true
         toolbar.layer?.backgroundColor = NSColor.clear.cgColor
 
-        let title = NSTextField(labelWithString: String(localized: "远程会话"))
+        let title = NSTextField(labelWithString: displayedSessionTitle)
         title.font = .systemFont(ofSize: 12, weight: .medium)
         title.textColor = .labelColor
         title.alignment = .center
         title.lineBreakMode = .byTruncatingTail
         title.translatesAutoresizingMaskIntoConstraints = false
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        sessionTitleLabel = title
 
         let image = NSImage(systemSymbolName: "keyboard", accessibilityDescription: nil) ?? NSImage()
         let button = NSButton(image: image, target: self, action: #selector(toggleKeyboardCapture))
@@ -829,6 +1095,7 @@ final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDele
         displayActivationRetryTask = nil
         captureToolbarButton = nil
         resolutionToolbarButton = nil
+        sessionTitleLabel = nil
         shortcutCaptureStatus = .inactive
         FarframeLog.logger(for: .session).info("Remote session window closed")
         onWindowClosed?()
@@ -907,12 +1174,9 @@ final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDele
                 width: CGFloat(fixedSize.width),
                 height: CGFloat(fixedSize.height)
             )
-            // Old legacy scrollers reduce contentSize. Remove them before
-            // sizing the new viewport so they cannot make themselves appear
-            // necessary after switching from a large to a smaller desktop.
-            scrollView.hasHorizontalScroller = false
-            scrollView.hasVerticalScroller = false
-            scrollView.tile()
+            // Remove the overlay controls before measuring the viewport so a
+            // resolution transition starts from one deterministic layout.
+            scrollView.setPersistentScrollersVisible(horizontal: false, vertical: false)
             if resizeWindow {
                 resizeWindowForFixedResolution(documentSize)
             }
@@ -920,27 +1184,18 @@ final class RemoteSessionWindowManager: NSObject, ObservableObject, NSWindowDele
             canvas.autoresizingMask = []
             canvas.setFrameSize(documentSize)
             canvas.setScalingMode(.fit)
-            scrollView.scrollerStyle = .overlay
-            scrollView.autohidesScrollers = false
-            for _ in 0..<2 {
-                let viewportSize = scrollView.contentSize
-                scrollView.hasHorizontalScroller = documentSize.width > viewportSize.width + 0.5
-                scrollView.hasVerticalScroller = documentSize.height > viewportSize.height + 0.5
-                scrollView.tile()
-            }
-            scrollView.horizontalScroller?.knobStyle = .light
-            scrollView.verticalScroller?.knobStyle = .light
-            scrollView.contentView.setBoundsOrigin(.zero)
+            scrollView.scrollerStyle = .legacy
+            let viewportSize = scrollView.contentSize
+            scrollView.setPersistentScrollersVisible(
+                horizontal: documentSize.width > viewportSize.width + 0.5,
+                vertical: documentSize.height > viewportSize.height + 0.5
+            )
+            (scrollView.contentView as? TopLeftRemoteClipView)?.scrollToDocumentTopLeft()
             scrollView.reflectScrolledClipView(scrollView.contentView)
-            scrollView.horizontalScroller?.alphaValue = 1
-            scrollView.verticalScroller?.alphaValue = 1
-            scrollView.horizontalScroller?.needsDisplay = true
-            scrollView.verticalScroller?.needsDisplay = true
         } else {
-            scrollView.hasHorizontalScroller = false
-            scrollView.hasVerticalScroller = false
-            scrollView.autohidesScrollers = true
-            scrollView.scrollerStyle = .overlay
+            scrollView.setPersistentScrollersVisible(horizontal: false, vertical: false)
+            scrollView.autohidesScrollers = false
+            scrollView.scrollerStyle = .legacy
             canvas.autoresizingMask = [.width, .height]
             canvas.setFrameSize(scrollView.contentSize)
             canvas.setScalingMode(.actualPixels)

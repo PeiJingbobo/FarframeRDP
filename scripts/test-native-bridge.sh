@@ -53,6 +53,7 @@ macos_sdk=$(xcrun --sdk macosx --show-sdk-path)
     -framework CoreAudio \
     -framework AudioToolbox \
     -framework AVFoundation \
+    -lc++ \
     -o "$test_binary"
 
 ASAN_OPTIONS=abort_on_error=1 \

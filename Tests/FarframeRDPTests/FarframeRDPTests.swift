@@ -41,6 +41,19 @@ final class FarframeRDPTests: XCTestCase {
         XCTAssertEqual(SettingsDestination.keyboard.title, "\u{952E}\u{76D8}\u{4E0E}\u{5FEB}\u{6377}\u{952E}")
     }
 
+    func testConnectionLibraryUsesOnlyTheSystemSidebarToggle() throws {
+        let projectRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceURL = projectRoot
+            .appendingPathComponent("Sources/FarframeRDP/ConnectionLibraryView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertFalse(source.contains(".toolbar(removing: .sidebarToggle)"))
+        XCTAssertFalse(source.contains("NSSplitViewController.toggleSidebar"))
+    }
+
     func testApplicationTerminatesAfterLastWindowCloses() {
         let delegate = FarframeApplicationDelegate()
 
@@ -153,7 +166,7 @@ final class FarframeRDPTests: XCTestCase {
         XCTAssertEqual(manager.activePresentationRate, .adaptive)
         XCTAssertTrue(manager.supportsNativeFullScreen)
         XCTAssertTrue(manager.usesScrollableRemoteCanvas)
-        XCTAssertTrue(manager.usesOverlayRemoteScrollers)
+        XCTAssertFalse(manager.usesOverlayRemoteScrollers)
         XCTAssertTrue(manager.remoteViewportBackgroundIsTransparent)
         XCTAssertTrue(manager.usesImmersiveWindowChrome)
         XCTAssertTrue(manager.usesUnifiedWindowChromeMaterial)
@@ -195,7 +208,9 @@ final class FarframeRDPTests: XCTestCase {
         XCTAssertEqual(manager.shortcutCaptureStatus, .basic)
         XCTAssertFalse(viewportRequests.isEmpty)
         let immediateRequestCount = viewportRequests.count
-        try await Task.sleep(for: .milliseconds(30))
+        for _ in 0..<30 where viewportRequests.count == immediateRequestCount {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         XCTAssertGreaterThan(viewportRequests.count, immediateRequestCount)
 
         let requestCountBeforeLiveResize = viewportRequests.count
@@ -224,11 +239,36 @@ final class FarframeRDPTests: XCTestCase {
         XCTAssertEqual(manager.remoteCanvasSize, CGSize(width: 1280, height: 720))
         XCTAssertTrue(manager.hasHorizontalRemoteScroller)
         XCTAssertTrue(manager.hasVerticalRemoteScroller)
+        XCTAssertTrue(manager.usesPersistentRemoteScrollers)
+        XCTAssertTrue(manager.remoteScrollersAreManagedByScrollView)
+        XCTAssertTrue(manager.usesNativeRemoteScrollers)
+        XCTAssertTrue(manager.remoteScrollersHaveNativeActions)
+        XCTAssertTrue(manager.remoteScrollersOverlapCanvasViewport)
+        XCTAssertEqual(manager.remoteScrollerAlphaValues.count, 2)
+        XCTAssertTrue(manager.remoteScrollerAlphaValues.allSatisfy { $0 == 1 })
+        XCTAssertEqual(manager.remoteScrollerFrames.count, 2)
+        XCTAssertTrue(
+            manager.remoteScrollerFrames.contains { $0.width > $0.height && !$0.isEmpty }
+        )
+        XCTAssertTrue(
+            manager.remoteScrollerFrames.contains { $0.height > $0.width && !$0.isEmpty }
+        )
+        XCTAssertEqual(manager.remoteScrollerKnobRects.count, 2)
+        XCTAssertTrue(
+            manager.remoteScrollerKnobRects.contains { $0.width > 100 && $0.width > $0.height }
+        )
+        XCTAssertTrue(
+            manager.remoteScrollerKnobRects.contains { $0.height > 100 && $0.height > $0.width }
+        )
 
         manager.resizeRemoteWindow(to: CGSize(width: 1440, height: 900))
         XCTAssertEqual(manager.remoteCanvasSize, CGSize(width: 1280, height: 720))
         XCTAssertFalse(manager.hasHorizontalRemoteScroller)
         XCTAssertFalse(manager.hasVerticalRemoteScroller)
+        let topAlignedViewport = try XCTUnwrap(manager.remoteViewportBounds)
+        XCTAssertEqual(topAlignedViewport.minX, 0, accuracy: 0.5)
+        XCTAssertEqual(topAlignedViewport.maxY, 720, accuracy: 0.5)
+        XCTAssertLessThan(topAlignedViewport.minY, 0)
         XCTAssertEqual(viewportRequests.count, fixedResolutionRequestCount)
 
         manager.resolution = .size3840x2160
@@ -288,6 +328,56 @@ final class FarframeRDPTests: XCTestCase {
         )
     }
 
+    func testRemoteSessionWindowTitleIncludesProfileNameAndAddress() {
+        XCTAssertEqual(
+            RemoteSessionWindowIdentity(
+                displayName: "电脑A",
+                host: "192.168.10.3",
+                port: 3389
+            ).title,
+            "电脑A-192.168.10.3"
+        )
+        XCTAssertEqual(
+            RemoteSessionWindowIdentity(
+                displayName: "测试机",
+                host: "2001:db8::10",
+                port: 3390
+            ).title,
+            "测试机-[2001:db8::10]:3390"
+        )
+    }
+
+    func testRemoteTitlebarElementsAlignWithStandardWindowButtons() {
+        let manager = RemoteSessionWindowManager()
+        manager.sessionIdentity = RemoteSessionWindowIdentity(
+            displayName: "电脑A",
+            host: "192.168.10.3",
+            port: 3389
+        )
+
+        manager.openRemoteWindow()
+        let systemButtonCenters = manager.standardWindowButtonCenterYs
+        manager.setFloatingToolbarVisible(true)
+
+        XCTAssertEqual(manager.remoteWindowTitle, "电脑A-192.168.10.3")
+        XCTAssertEqual(manager.displayedToolbarTitle, "电脑A-192.168.10.3")
+        let verticalOffsets = manager.titlebarElementVerticalOffsets
+        XCTAssertEqual(verticalOffsets.count, 2)
+        XCTAssertTrue(
+            verticalOffsets.allSatisfy { abs($0) <= 0.5 },
+            "Titlebar elements are vertically offset: \(verticalOffsets)"
+        )
+        XCTAssertEqual(manager.standardWindowButtonCenterYs.count, systemButtonCenters.count)
+        XCTAssertTrue(
+            zip(manager.standardWindowButtonCenterYs, systemButtonCenters).allSatisfy { centers in
+                abs(centers.0 - centers.1) <= 0.5
+            },
+            "Showing the custom toolbar must not move AppKit's titlebar buttons"
+        )
+
+        manager.closeRemoteWindow()
+    }
+
     func testRemoteToolbarDoubleClickTogglesWindowZoom() {
         XCTAssertFalse(RemoteToolbarInteractionPolicy.togglesWindowZoom(clickCount: 1))
         XCTAssertTrue(RemoteToolbarInteractionPolicy.togglesWindowZoom(clickCount: 2))
@@ -309,6 +399,80 @@ final class FarframeRDPTests: XCTestCase {
             ),
             CGSize(width: 1280, height: 720)
         )
+    }
+
+    func testRemoteDocumentAlignmentUsesTopLeftOrigin() {
+        XCTAssertEqual(
+            RemoteDocumentAlignmentPolicy.topLeftBoundsOrigin(
+                documentFrame: CGRect(x: 0, y: 0, width: 1280, height: 720),
+                viewportSize: CGSize(width: 1440, height: 860)
+            ),
+            CGPoint(x: 0, y: -140)
+        )
+        XCTAssertEqual(
+            RemoteDocumentAlignmentPolicy.topLeftBoundsOrigin(
+                documentFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+                viewportSize: CGSize(width: 1440, height: 860)
+            ),
+            CGPoint(x: 0, y: 220)
+        )
+    }
+
+    func testPersistentRemoteScrollerOnlyCapturesItsKnob() {
+        let host = NSView(frame: NSRect(x: 0, y: 0, width: 20, height: 240))
+        let scroller = PersistentRemoteScroller(frame: host.bounds)
+        scroller.scrollerStyle = .legacy
+        scroller.knobStyle = .light
+        scroller.knobProportion = 0.25
+        scroller.doubleValue = 0.5
+        host.addSubview(scroller)
+
+        let knobRect = scroller.renderedKnobRect
+        XCTAssertFalse(knobRect.isEmpty)
+        let knobPoint = NSPoint(x: knobRect.midX, y: knobRect.midY)
+        XCTAssertTrue(scroller.capturesKnob(at: knobPoint))
+        XCTAssertIdentical(
+            scroller.hitTest(scroller.convert(knobPoint, to: host)),
+            scroller
+        )
+
+        let trackPoint = NSPoint(x: scroller.bounds.midX, y: scroller.bounds.minY + 1)
+        XCTAssertFalse(knobRect.contains(trackPoint))
+        XCTAssertFalse(scroller.capturesKnob(at: trackPoint))
+        XCTAssertNil(scroller.hitTest(scroller.convert(trackPoint, to: host)))
+
+        scroller.alphaValue = 0
+        XCTAssertEqual(scroller.alphaValue, 1)
+        XCTAssertEqual(scroller.scrollerStyle, .legacy)
+        XCTAssertEqual(scroller.knobStyle, .light)
+    }
+
+    func testNativeRemoteScrollerRendersBothOrientations() throws {
+        let scrollbars = [
+            PersistentRemoteScroller(frame: NSRect(x: 0, y: 0, width: 320, height: 16)),
+            PersistentRemoteScroller(frame: NSRect(x: 0, y: 0, width: 16, height: 240)),
+        ]
+
+        for scroller in scrollbars {
+            scroller.controlSize = .regular
+            scroller.scrollerStyle = .legacy
+            scroller.knobStyle = .light
+            scroller.knobProportion = 0.5
+            scroller.doubleValue = 0.25
+            scroller.layoutSubtreeIfNeeded()
+
+            XCTAssertFalse(scroller.renderedKnobRect.isEmpty)
+            let bitmap = try XCTUnwrap(scroller.bitmapImageRepForCachingDisplay(in: scroller.bounds))
+            scroller.cacheDisplay(in: scroller.bounds, to: bitmap)
+            let containsDrawnPixel = (0..<bitmap.pixelsHigh).contains { y in
+                (0..<bitmap.pixelsWide).contains { x in
+                    (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0
+                }
+            }
+            XCTAssertTrue(containsDrawnPixel)
+            XCTAssertEqual(scroller.scrollerStyle, .legacy)
+            XCTAssertEqual(scroller.knobStyle, .light)
+        }
     }
 }
 

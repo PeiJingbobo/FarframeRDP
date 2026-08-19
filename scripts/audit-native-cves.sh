@@ -41,3 +41,4 @@ audit_commit() {
 # WinPR shares the exact FreeRDP source commit, so the same commit query covers both.
 audit_commit "FreeRDP/WinPR $FARFRAME_FREERDP_VERSION" "$FARFRAME_FREERDP_COMMIT"
 audit_commit "OpenSSL $FARFRAME_OPENSSL_VERSION" "$FARFRAME_OPENSSL_COMMIT"
+audit_commit "OpenH264 $FARFRAME_OPENH264_VERSION" "$FARFRAME_OPENH264_COMMIT"

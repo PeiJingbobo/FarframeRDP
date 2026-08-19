@@ -142,7 +142,7 @@ int main(void)
     assert(!FFRValidateCursorGeometry(UINT32_MAX, UINT32_MAX, 0U, 0U,
                                       &validatedLength));
 
-    assert(FFRBridgeABIVersion() == 10U);
+    assert(FFRBridgeABIVersion() == 11U);
     assert(strcmp(FFRFreeRDPVersion(), "3.30.0") == 0);
     assert(strlen(FFRFreeRDPBuildRevision()) > 0);
     assert(FFRBridgeLiveSessionCount() == 0U);

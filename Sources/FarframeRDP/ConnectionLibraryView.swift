@@ -187,22 +187,7 @@ struct ConnectionLibraryView: View {
             }
         }
         .navigationTitle("Farframe RDP")
-        .toolbar(removing: .sidebarToggle)
         .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    NSApp.sendAction(
-                        #selector(NSSplitViewController.toggleSidebar(_:)),
-                        to: nil,
-                        from: nil
-                    )
-                } label: {
-                    Label("显示或隐藏侧边栏", systemImage: "sidebar.left")
-                }
-                .focusable(false)
-                .help("显示或隐藏侧边栏")
-            }
-
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
                     libraryController.refresh(
@@ -462,6 +447,11 @@ struct ConnectionLibraryView: View {
         do {
             let result = try draft.validated()
             activeProfileID = profileID
+            remoteWindowManager.sessionIdentity = RemoteSessionWindowIdentity(
+                displayName: result.draft.displayName,
+                host: result.endpoint.host,
+                port: result.endpoint.port
+            )
             remoteWindowManager.monitorSelection = result.draft.desktopOptions.monitorSelection
             remoteWindowManager.resolution = result.draft.desktopOptions.resolution
             remoteWindowManager.presentationRate = result.draft.desktopOptions.presentationRate

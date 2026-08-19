@@ -37,16 +37,18 @@ source_root="$project_root/third-party/sources"
 build_root="$project_root/third-party/build/macos-arm64"
 artifact_root="$project_root/third-party/artifacts/macos-arm64"
 openssl_source="$source_root/openssl"
+openh264_source="$source_root/openh264"
 freerdp_source="$source_root/freerdp"
 freerdp_patch="$project_root/third-party/patches/freerdp-drive-canonical-containment.patch"
 openssl_prefix="$artifact_root/openssl"
+openh264_prefix="$artifact_root/openh264"
 freerdp_prefix="$artifact_root/freerdp"
 combined_lib="$artifact_root/lib/libFarframeRDPDependencies.a"
 stamp_file="$artifact_root/build-manifest.txt"
 
 expected_manifest=$(cat <<EOF
 platform=macos-arm64
-build_recipe=11
+build_recipe=12
 deployment_target=14.0
 system_processor=aarch64
 with_simd=OFF
@@ -57,14 +59,18 @@ channel_drive=ON
 channel_printer=OFF
 channel_rail=ON
 channel_rdpdr=ON
+channel_rdpgfx=ON
 channel_rdpsnd=ON
 channel_smartcard=OFF
 with_cups=OFF
 with_pcsc=OFF
+with_openh264=ON
 freerdp_version=$FARFRAME_FREERDP_VERSION
 freerdp_commit=$FARFRAME_FREERDP_COMMIT
 openssl_version=$FARFRAME_OPENSSL_VERSION
 openssl_commit=$FARFRAME_OPENSSL_COMMIT
+openh264_version=$FARFRAME_OPENH264_VERSION
+openh264_commit=$FARFRAME_OPENH264_COMMIT
 EOF
 )
 
@@ -131,6 +137,12 @@ checkout_exact_commit \
     "$freerdp_source" \
     FreeRDP
 
+checkout_exact_commit \
+    "$FARFRAME_OPENH264_REPOSITORY" \
+    "$FARFRAME_OPENH264_COMMIT" \
+    "$openh264_source" \
+    OpenH264
+
 # The upstream drive add-in rejects `..` components, but the pinned 3.30.0
 # implementation otherwise follows symlinks without checking that the resolved
 # target remains below the explicitly shared root. Keep this security patch in
@@ -168,6 +180,22 @@ if [ ! -f "$openssl_stamp" ] || [ "$(cat "$openssl_stamp")" != "$openssl_expecte
     printf '%s\n' "$openssl_expected_stamp" > "$openssl_stamp"
 fi
 
+openh264_stamp="$openh264_prefix/.farframe-build-commit"
+openh264_expected_stamp="$FARFRAME_OPENH264_COMMIT macos-arm64 deployment-target-14.0"
+if [ ! -f "$openh264_stamp" ] ||
+   [ "$(cat "$openh264_stamp")" != "$openh264_expected_stamp" ]; then
+    rm -rf "$openh264_prefix"
+    mkdir -p "$openh264_prefix"
+    MACOSX_DEPLOYMENT_TARGET=14.0 "$build_tool_bin" \
+        -C "$openh264_source" \
+        -j"$(sysctl -n hw.logicalcpu)" \
+        ARCH=arm64 \
+        BUILDTYPE=Release \
+        PREFIX="$openh264_prefix" \
+        install-static
+    printf '%s\n' "$openh264_expected_stamp" > "$openh264_stamp"
+fi
+
 freerdp_build="$build_root/freerdp"
 rm -rf "$freerdp_build" "$freerdp_prefix"
 
@@ -181,9 +209,10 @@ MACOSX_DEPLOYMENT_TARGET=14.0 "$cmake_bin" \
     -DCMAKE_OSX_ARCHITECTURES=arm64 \
     -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
     -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-    -DCMAKE_PREFIX_PATH="$openssl_prefix" \
+    -DCMAKE_PREFIX_PATH="$openssl_prefix;$openh264_prefix" \
     -DOPENSSL_ROOT_DIR="$openssl_prefix" \
     -DOPENSSL_USE_STATIC_LIBS=TRUE \
+    -DOPENH264_ROOT="$openh264_prefix" \
     -DBUILD_SHARED_LIBS=OFF \
     -DBUILD_TESTING=OFF \
     -DBUILD_TESTING_INTERNAL=OFF \
@@ -220,7 +249,7 @@ MACOSX_DEPLOYMENT_TARGET=14.0 "$cmake_bin" \
     -DCHANNEL_RDPEI=OFF \
     -DCHANNEL_RDPEMSC=OFF \
     -DCHANNEL_RDPEWA=OFF \
-    -DCHANNEL_RDPGFX=OFF \
+    -DCHANNEL_RDPGFX=ON \
     -DCHANNEL_RDPSND=ON \
     -DCHANNEL_REMDESK=OFF \
     -DCHANNEL_SERIAL=OFF \
@@ -235,7 +264,8 @@ MACOSX_DEPLOYMENT_TARGET=14.0 "$cmake_bin" \
     -DWITH_WINPR_TOOLS=OFF \
     -DWITH_OPENSSL=ON \
     -DWITH_MBEDTLS=OFF \
-    -DWITH_OPENH264=OFF \
+    -DWITH_OPENH264=ON \
+    -DWITH_OPENH264_LOADING=OFF \
     -DWITH_FFMPEG=OFF \
     -DWITH_SWSCALE=OFF \
     -DWITH_SIMD=OFF \
@@ -249,11 +279,12 @@ MACOSX_DEPLOYMENT_TARGET=14.0 "$cmake_bin" \
     -DWITH_DEBUG_CERTIFICATE=OFF \
     -DWITH_DEBUG_KBD=OFF
 
-"$cmake_bin" --build "$freerdp_build"
+"$cmake_bin" --build "$freerdp_build" --parallel "$(sysctl -n hw.logicalcpu)"
 "$cmake_bin" --install "$freerdp_build"
 
 archive_list="$build_root/native-archives.txt"
-find "$freerdp_prefix/lib" "$openssl_prefix/lib" -type f -name '*.a' -print | sort > "$archive_list"
+find "$freerdp_prefix/lib" "$openssl_prefix/lib" "$openh264_prefix/lib" \
+    -type f -name '*.a' -print | sort > "$archive_list"
 if [ ! -s "$archive_list" ]; then
     echo "error: no static native dependency archives were produced" >&2
     exit 1
@@ -261,7 +292,7 @@ fi
 
 # Apple libtool creates one private aggregate archive so Xcode consumers never
 # need Homebrew paths or a fragile hand-maintained transitive library list.
-# Archive paths come only from the two fixed installation prefixes above.
+# Archive paths come only from the three fixed installation prefixes above.
 archives=$(cat "$archive_list")
 # shellcheck disable=SC2086
 xcrun libtool -static -o "$combined_lib" $archives

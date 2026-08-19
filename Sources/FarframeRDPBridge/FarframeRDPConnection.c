@@ -737,6 +737,7 @@ FFRResult FFRSessionConfigure(FFRSession *session,
     const bool hasGateway = settings->gatewayHostname != NULL;
     const bool hasRemoteApp = settings->remoteAppProgram != NULL;
     const bool hasMicrophone = settings->microphoneRedirection;
+    const bool enableGraphicsPipeline = !hasRemoteApp;
     if (hasGateway) {
         if (settings->gatewayPort == 0U ||
             (!settings->gatewayUseSameCredentials &&
@@ -781,6 +782,20 @@ FFRResult FFRSessionConfigure(FFRSession *session,
         freerdp_settings_set_bool(target, FreeRDP_NetworkAutoDetect, FALSE) &&
         freerdp_settings_set_bool(target, FreeRDP_SupportHeartbeatPdu, FALSE) &&
         freerdp_settings_set_bool(target, FreeRDP_SupportMultitransport, FALSE) &&
+        freerdp_settings_set_bool(target, FreeRDP_SupportGraphicsPipeline,
+                                  enableGraphicsPipeline) &&
+        freerdp_settings_set_bool(target, FreeRDP_GfxProgressive,
+                                  enableGraphicsPipeline) &&
+        freerdp_settings_set_bool(target, FreeRDP_GfxProgressiveV2,
+                                  enableGraphicsPipeline) &&
+        freerdp_settings_set_bool(target, FreeRDP_GfxH264,
+                                  enableGraphicsPipeline) &&
+        freerdp_settings_set_bool(target, FreeRDP_GfxAVC444,
+                                  enableGraphicsPipeline) &&
+        freerdp_settings_set_bool(target, FreeRDP_GfxAVC444v2,
+                                  enableGraphicsPipeline) &&
+        freerdp_settings_set_bool(target, FreeRDP_FastPathOutput, TRUE) &&
+        freerdp_settings_set_bool(target, FreeRDP_FrameMarkerCommandEnabled, TRUE) &&
         freerdp_settings_set_bool(target, FreeRDP_SupportDynamicTimeZone, TRUE) &&
         freerdp_settings_set_uint32(target, FreeRDP_KeyboardLayout, 0U) &&
         freerdp_settings_set_uint32(target, FreeRDP_KeyboardType,
@@ -803,7 +818,8 @@ FFRResult FFRSessionConfigure(FFRSession *session,
                                            CLIPRDR_FLAG_REMOTE_TO_LOCAL)
                                         : 0U) &&
         freerdp_settings_set_bool(target, FreeRDP_SupportDynamicChannels,
-                                  settings->dynamicResolution || hasMicrophone) &&
+                                  enableGraphicsPipeline || settings->dynamicResolution ||
+                                      hasMicrophone) &&
         freerdp_settings_set_bool(target, FreeRDP_SupportDisplayControl,
                                   settings->dynamicResolution) &&
         freerdp_settings_set_bool(target, FreeRDP_DynamicResolutionUpdate,
@@ -908,6 +924,8 @@ FFRResult FFRSessionConfigure(FFRSession *session,
     FFRClearClipboardState(session);
     session->displayControl = NULL;
     session->displayControlActivated = false;
+    session->graphicsPipeline = NULL;
+    session->graphicsPipelineActive = false;
     session->hasPendingResize = false;
     session->pendingResizeWidth = 0U;
     session->pendingResizeHeight = 0U;
@@ -1090,4 +1108,13 @@ FFRSecurityProtocol FFRSessionNegotiatedSecurityProtocol(const FFRSession *sessi
 {
     return session == NULL ? FFR_SECURITY_PROTOCOL_UNKNOWN
                            : session->negotiatedSecurityProtocol;
+}
+
+bool FFRSessionGraphicsPipelineRequested(const FFRSession *session)
+{
+    return session != NULL && session->instance != NULL &&
+           session->instance->context != NULL &&
+           session->instance->context->settings != NULL &&
+           freerdp_settings_get_bool(session->instance->context->settings,
+                                     FreeRDP_SupportGraphicsPipeline);
 }
