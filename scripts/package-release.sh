@@ -65,6 +65,7 @@ fi
 
 codesign --verify --deep --strict --verbose=2 "$app_path"
 /bin/sh "$script_dir/check-app-static-addins.sh" "$derived_data" Release
+/bin/sh "$script_dir/check-release-runtime-dependencies.sh" "$app_path"
 
 mkdir -p "$release_root"
 staging_root=$(mktemp -d "${TMPDIR:-/tmp}/farframe-release.XXXXXX")

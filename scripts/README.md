@@ -18,6 +18,8 @@
 - **validate-release-version.sh**：校验 `vX.Y.Z` 发布标签与 App Release `MARKETING_VERSION` 完全一致。
 - **package-release.sh**：生成 ad-hoc 签名、未公证的 Universal 2 DMG 和 SHA-256 文件。
 - **check-release-toolchain.sh**：阻止本地或 CI 使用未经真实 NLA 验收的 Xcode/SDK 生成发布包。
+- **check-release-runtime-dependencies.sh**：检查发布 App 不包含构建机原生依赖路径，并确认 Universal
+  二进制内置 NLA/NTLM 所需的 MD4 与 RC4 实现。
 - **release-toolchain.sh**：记录发布所固定的 Xcode、build 与 macOS SDK 版本。
 - **test-native-bridge.sh**：使用 ASan/UBSan 运行独立 Bridge 所有权与线程 harness。
 - **test-rdp-integration.sh**：只从 Git 忽略的本地 JSON 读取端点、临时凭据和证书决定，编译并运行真实连接 harness。
@@ -45,6 +47,10 @@ ID 签名或已公证版本。当前设置来自本机 Release 二分验证：�
 当前发布工具链固定为 Xcode 26.2（17C52）和 macOS SDK 26.2。GitHub hosted runner 会改变默认
 Xcode，因此 workflow 必须先显式设置 `DEVELOPER_DIR`；原生依赖 manifest 同时记录 Xcode、SDK
 与 Clang 指纹，防止跨工具链错误复用缓存。
+
+OpenSSL 使用固定逻辑安装前缀构建为无动态 module、无 legacy provider 的静态库；WinPR 明确启用
+内置 MD4 与 RC4，避免 NLA/NTLM 在安装后依赖构建机上的 `ossl-modules` 目录。打包阶段会拒绝仍
+包含原生依赖构建目录的二进制。
 
 推送格式为 `vX.Y.Z` 的标签会触发 GitHub Action。Action 在任何编译前读取 Xcode Release
 构建设置；标签去掉 `v` 后与 `MARKETING_VERSION` 不一致时立即失败。成功后创建或更新正式

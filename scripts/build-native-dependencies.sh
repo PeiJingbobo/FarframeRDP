@@ -71,6 +71,7 @@ openssl_source="$source_root/openssl"
 openh264_source="$source_root/openh264"
 freerdp_source="$source_root/freerdp"
 freerdp_patch="$project_root/third-party/patches/freerdp-drive-canonical-containment.patch"
+freerdp_crypto_patch="$project_root/third-party/patches/freerdp-skip-legacy-provider-with-internal-md4.patch"
 openssl_prefix="$artifact_root/openssl"
 openh264_prefix="$artifact_root/openh264"
 freerdp_prefix="$artifact_root/freerdp"
@@ -79,7 +80,7 @@ stamp_file="$artifact_root/build-manifest.txt"
 
 expected_manifest=$(cat <<EOF
 platform=$platform
-build_recipe=19
+build_recipe=22
 deployment_target=14.0
 system_processor=$system_processor
 xcode_version=$xcode_version
@@ -87,6 +88,14 @@ xcode_build=$xcode_build
 macos_sdk_version=$macos_sdk_version
 clang_version=$clang_version
 with_simd=OFF
+with_internal_md4=ON
+with_internal_rc4=ON
+openssl_legacy_provider=OFF
+openssl_dynamic_modules=OFF
+openssl_runtime_prefix=/openssl
+freerdp_runtime_prefix=/freerdp
+build_path_prefix_map=ON
+winpr_legacy_provider_load=SKIPPED_INTERNAL_MD4
 openh264_use_asm=$openh264_use_asm
 channel_audin=ON
 channel_cliprdr=ON
@@ -199,8 +208,17 @@ else
     exit 1
 fi
 
+if git -C "$freerdp_source" apply --reverse --check "$freerdp_crypto_patch" 2>/dev/null; then
+    : # already applied in this local checkout
+elif git -C "$freerdp_source" apply --check "$freerdp_crypto_patch"; then
+    git -C "$freerdp_source" apply "$freerdp_crypto_patch"
+else
+    echo "error: FreeRDP internal MD4 provider patch does not apply cleanly" >&2
+    exit 1
+fi
+
 openssl_stamp="$openssl_prefix/.farframe-build-commit"
-openssl_expected_stamp="$FARFRAME_OPENSSL_COMMIT $platform deployment-target-14.0 xcode-build-$xcode_build explicit-sdk-$macos_sdk_version"
+openssl_expected_stamp="$FARFRAME_OPENSSL_COMMIT $platform deployment-target-14.0 xcode-build-$xcode_build explicit-sdk-$macos_sdk_version logical-prefix-/openssl no-legacy no-module build-path-prefix-map"
 if [ ! -f "$openssl_stamp" ] || [ "$(cat "$openssl_stamp")" != "$openssl_expected_stamp" ]; then
     openssl_build="$build_root/openssl"
     rm -rf "$openssl_build" "$openssl_prefix"
@@ -211,16 +229,18 @@ if [ ! -f "$openssl_stamp" ] || [ "$(cat "$openssl_stamp")" != "$openssl_expecte
         export MACOSX_DEPLOYMENT_TARGET=14.0
         export SDKROOT="$macos_sdk_path"
         export CC="$clang_path"
-        export CFLAGS="-isysroot $macos_sdk_path -mmacosx-version-min=14.0"
+        export CFLAGS="-isysroot $macos_sdk_path -mmacosx-version-min=14.0 -ffile-prefix-map=$project_root=."
         "$openssl_source/Configure" \
             "$openssl_target" \
             no-shared \
+            no-legacy \
+            no-module \
             no-tests \
             no-docs \
-            --prefix="$openssl_prefix" \
-            --openssldir="$openssl_prefix/ssl"
+            --prefix=/openssl \
+            --openssldir=/openssl/ssl
         make -j"$(sysctl -n hw.logicalcpu)"
-        make install_sw
+        make install_sw DESTDIR="$artifact_root"
     )
     printf '%s\n' "$openssl_expected_stamp" > "$openssl_stamp"
 fi
@@ -241,6 +261,8 @@ if [ ! -f "$openh264_stamp" ] ||
         CC="$clang_path -isysroot $macos_sdk_path -arch $architecture" \
         CXX="$clangxx_path -isysroot $macos_sdk_path -arch $architecture" \
         CCAS="$clang_path -isysroot $macos_sdk_path -arch $architecture" \
+        CFLAGS="-ffile-prefix-map=$project_root=." \
+        CXXFLAGS="-ffile-prefix-map=$project_root=." \
         ARCH="$architecture" \
         USE_ASM="$openh264_use_asm" \
         BUILDTYPE=Release \
@@ -258,8 +280,9 @@ MACOSX_DEPLOYMENT_TARGET=14.0 "$cmake_bin" \
     -G "$cmake_generator" \
     -DCMAKE_MAKE_PROGRAM="$build_tool_bin" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX="$freerdp_prefix" \
+    -DCMAKE_INSTALL_PREFIX=/freerdp \
     -DCMAKE_C_COMPILER="$clang_path" \
+    -DCMAKE_C_FLAGS="-ffile-prefix-map=$project_root=." \
     -DCMAKE_OSX_ARCHITECTURES="$architecture" \
     -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
     -DCMAKE_OSX_SYSROOT="$macos_sdk_path" \
@@ -319,6 +342,8 @@ MACOSX_DEPLOYMENT_TARGET=14.0 "$cmake_bin" \
     -DWITH_WINPR_TOOLS=OFF \
     -DWITH_OPENSSL=ON \
     -DWITH_MBEDTLS=OFF \
+    -DWITH_INTERNAL_MD4=ON \
+    -DWITH_INTERNAL_RC4=ON \
     -DWITH_OPENH264=ON \
     -DWITH_OPENH264_LOADING=OFF \
     -DWITH_JSON_DISABLED=ON \
@@ -336,7 +361,7 @@ MACOSX_DEPLOYMENT_TARGET=14.0 "$cmake_bin" \
     -DWITH_DEBUG_KBD=OFF
 
 "$cmake_bin" --build "$freerdp_build" --parallel "$(sysctl -n hw.logicalcpu)"
-"$cmake_bin" --install "$freerdp_build"
+DESTDIR="$artifact_root" "$cmake_bin" --install "$freerdp_build"
 
 archive_list="$build_root/native-archives.txt"
 find "$freerdp_prefix/lib" "$openssl_prefix/lib" "$openh264_prefix/lib" \

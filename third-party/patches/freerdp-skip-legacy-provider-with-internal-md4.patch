@@ -1,0 +1,21 @@
+diff --git a/winpr/libwinpr/utils/ssl.c b/winpr/libwinpr/utils/ssl.c
+index 85ee5cc10..34ddd99f3 100644
+--- a/winpr/libwinpr/utils/ssl.c
++++ b/winpr/libwinpr/utils/ssl.c
+@@ -326,12 +326,16 @@ static BOOL CALLBACK winpr_openssl_initialize(WINPR_ATTR_UNUSED PINIT_ONCE once,
+ #endif
+ 
+ #if defined(OPENSSL_VERSION_MAJOR) && (OPENSSL_VERSION_MAJOR >= 3)
++#if defined(WITH_INTERNAL_MD4)
++	WLog_DBG(TAG, "Using WinPR internal MD4 implementation");
++#else
+ 	/* The legacy provider is needed for MD4. */
+ 	s_winpr_openssl_provider_legacy = OSSL_PROVIDER_load(nullptr, "legacy");
+ 	if (s_winpr_openssl_provider_legacy == nullptr)
+ 	{
+ 		WLog_WARN(TAG, "OpenSSL LEGACY provider failed to load, no md4 support available!");
+ 	}
++#endif
+ 	s_winpr_openssl_provider_default = OSSL_PROVIDER_load(nullptr, "default");
+ 	if (s_winpr_openssl_provider_default == nullptr)
+ 	{

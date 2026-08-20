@@ -11,6 +11,9 @@
 #include <freerdp/settings_types.h>
 #include "drive_file.h"
 #include <winpr/string.h>
+#include <winpr/custom-crypto.h>
+#include <winpr/ntlm.h>
+#include <winpr/ssl.h>
 
 #include <assert.h>
 #include <limits.h>
@@ -107,8 +110,36 @@ static void ValidateHostileDrivePaths(void)
     assert(rmdir(outside) == 0);
 }
 
+static void ValidateSelfContainedNTLMCrypto(void)
+{
+    static const BYTE expectedHash[] = {
+        0x05, 0x80, 0x83, 0x4a, 0x04, 0x89, 0xed, 0x37,
+        0x49, 0x6b, 0x7b, 0xfa, 0xe9, 0x90, 0x9b, 0x70,
+    };
+    static const BYTE expectedCiphertext[] = {
+        0xbb, 0xf3, 0x16, 0xe8, 0xd9, 0x40, 0xaf, 0x0a, 0xd3,
+    };
+    static const char key[] = "Key";
+    static const char plaintext[] = "Plaintext";
+    BYTE hash[sizeof(expectedHash)] = { 0 };
+    BYTE ciphertext[sizeof(expectedCiphertext)] = { 0 };
+
+    assert(setenv("OPENSSL_MODULES", "/nonexistent/farframe/ossl-modules", 1) == 0);
+    assert(winpr_InitializeSSL(WINPR_SSL_INIT_DEFAULT));
+    assert(NTOWFv1A("foo1", 4U, hash));
+    assert(memcmp(hash, expectedHash, sizeof(expectedHash)) == 0);
+
+    WINPR_RC4_CTX *rc4 = winpr_RC4_New(key, sizeof(key) - 1U);
+    assert(rc4 != NULL);
+    assert(winpr_RC4_Update(rc4, sizeof(plaintext) - 1U, plaintext, ciphertext));
+    winpr_RC4_Free(rc4);
+    assert(memcmp(ciphertext, expectedCiphertext, sizeof(expectedCiphertext)) == 0);
+    assert(unsetenv("OPENSSL_MODULES") == 0);
+}
+
 int main(void)
 {
+    ValidateSelfContainedNTLMCrypto();
     ValidateHostileDrivePaths();
     const uint16_t terminatedClipboard[] = { 'o', 'k', 0U };
     const uint16_t unterminatedClipboard[] = { 'n', 'o' };

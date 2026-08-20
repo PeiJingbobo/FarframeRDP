@@ -66,12 +66,22 @@ Hardened Runtime 没有改变 TLS、NLA 或证书信任策略。
   架构、ad-hoc 签名和 SHA-256 均已校验通过；功能行为由上一项相同工具链候选的真实连接覆盖。
 - `v0.1.9` GitHub Action：已成功完成并创建非 Draft、非 prerelease 的正式 Release。下载后的远端
   DMG 已通过 SHA-256、版本、Xcode build `17C52`、SDK `macosx26.2`、Universal 架构与严格签名
-  校验；该远端产物的真实 NLA 连接尚待测试人员执行。
+  校验；远端产物的真实 NLA 连接已由测试人员执行，结果为失败，仍返回 `0x2000D`。
+- `v0.1.9` 安装产物诊断：系统日志确认本地网络路径最终为可用，目标 RDP 端口的 TCP 握手成功，
+  因此失败不在权限、DNS 或端口可达性阶段。CI 二进制包含构建机 OpenSSL 安装目录和 provider
+  目录的绝对路径，但 App 未携带 OpenSSL provider；运行进程也未加载 NLA/NTLM 所需的 legacy
+  provider。本地可用构建则能从仍存在的本地依赖目录加载该 provider。当前证据将故障定位到
+  TLS 建立后的 NLA/NTLM 密码摘要初始化阶段。
+- 自包含 NLA 修复候选：已将 OpenSSL 改为固定逻辑前缀、无 legacy provider、无动态 module 的
+  静态构建，并明确启用 WinPR 内置 MD4 与 RC4。原生 ASan/UBSan harness 在
+  `OPENSSL_MODULES` 指向不存在目录时通过已知 NTLM hash 与 RC4 向量；131 项 Debug Xcode 测试、
+  Release 安全设置检查、Universal Release 构建、严格签名、运行时依赖检查与 DMG 校验均通过。
+  本地候选 DMG 的真实 NLA 连接已由测试人员执行，确认可以正常运行并建立连接。
 
 ## 已知限制与后续门槛
 
 - 当前产物不是 Developer ID 签名且没有公证，Gatekeeper 体验不代表正式签名版本。
-- 固定 Xcode 26.2 后生成的新 CI 产物仍需重新执行真实 NLA 连接验证，工具链差异目前是已确认的
-  构建差异与首要嫌疑，尚不能在真实连接通过前宣称为最终根因。
+- 固定 Xcode 26.2 不能单独解决 CI 产物的 NLA 失败；自包含加密候选已通过本地 DMG 的真实连接
+  验收，随后生成的 CI DMG 仍需完成同样的真实 NLA 连接验收。
 - Apple 公证要求 Developer ID 签名和 Hardened Runtime。取得证书后不得直接沿用当前设置；必须恢复
   Hardened Runtime，审计 FreeRDP/WinPR 所需的最小 runtime exception，并重新运行真实 NLA 验收。

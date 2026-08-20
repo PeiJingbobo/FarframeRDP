@@ -15,6 +15,8 @@ Homebrew 安装。
 许可证原文放入 `third-party/licenses/`。当前 Universal 2 构建分别生成 arm64 与 x86_64 静态产物，
 再合并用于最终 App。当前实际静态链接 FreeRDP/WinPR 3.30.0、OpenSSL 3.5.7
 和 OpenH264 2.6.0；
+OpenSSL 不构建 legacy provider 或动态 module，WinPR 的 NLA/NTLM 路径使用明确启用的内置 MD4
+与 RC4，避免安装后的 App 依赖构建机 `ossl-modules` 目录。
 精确提交见 `versions.sh`，能力与安全决策见
 `docs/task/phase-2-native-dependency-decision.md`，验证与链接审计见
 `docs/task/phase-2-validation.md`。
