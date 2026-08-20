@@ -70,7 +70,7 @@ stamp_file="$artifact_root/build-manifest.txt"
 
 expected_manifest=$(cat <<EOF
 platform=$platform
-build_recipe=15
+build_recipe=16
 deployment_target=14.0
 system_processor=$system_processor
 with_simd=OFF
@@ -103,6 +103,7 @@ if [ -f "$stamp_file" ] && [ -f "$combined_lib" ] &&
     exit 0
 fi
 cmake_bin=$(find_tool FARFRAME_CMAKE cmake)
+make_bin=$(find_tool FARFRAME_MAKE make)
 if [ -n "${FARFRAME_CMAKE_GENERATOR:-}" ]; then
     cmake_generator=$FARFRAME_CMAKE_GENERATOR
 elif command -v ninja >/dev/null 2>&1; then
@@ -115,7 +116,7 @@ case "$cmake_generator" in
         build_tool_bin=$(find_tool FARFRAME_NINJA ninja)
         ;;
     "Unix Makefiles")
-        build_tool_bin=$(find_tool FARFRAME_MAKE make)
+        build_tool_bin=$make_bin
         ;;
     *)
         echo "error: unsupported FARFRAME_CMAKE_GENERATOR: $cmake_generator" >&2
@@ -219,7 +220,7 @@ if [ ! -f "$openh264_stamp" ] ||
     mkdir -p "$openh264_build_source" "$openh264_prefix"
     git -C "$openh264_source" archive --format=tar "$FARFRAME_OPENH264_COMMIT" |
         tar -xf - -C "$openh264_build_source"
-    MACOSX_DEPLOYMENT_TARGET=14.0 "$build_tool_bin" \
+    MACOSX_DEPLOYMENT_TARGET=14.0 "$make_bin" \
         -C "$openh264_build_source" \
         -j"$(sysctl -n hw.logicalcpu)" \
         CC="clang -arch $architecture" \

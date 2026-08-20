@@ -3,8 +3,8 @@
 ## 元数据
 
 - 任务标识：universal-release-packaging
-- 范围：Farframe RDP 0.1.0 Universal 2、未公证 DMG 和 tag 触发 GitHub Action
-- 当前状态：本地自动化与 DMG 结构验证通过；Intel 实机和 GitHub Action 待执行
+- 范围：Farframe RDP 0.1.x Universal 2、未公证 DMG 和 tag 触发 GitHub Action
+- 当前状态：0.1.1 本地自动化与 DMG 结构验证通过；首轮 Action 发现的 OpenH264 工具选择问题已修复；0.1.1 Action 与 Intel 实机待执行
 
 ## 前置条件与安全测试数据
 
@@ -17,9 +17,9 @@
 
 | 步骤 | 操作 | 预期结果 | 状态 |
 | --- | --- | --- | --- |
-| 1 | 运行 `/bin/sh scripts/validate-release-version.sh v0.1.0` | 标签与 App `MARKETING_VERSION=0.1.0` 一致，校验通过 | 通过 |
-| 2 | 使用一个不匹配标签运行版本校验 | 在构建原生依赖前失败，不产生 DMG | 通过；本地使用 `v0.1.1` 验证 |
-| 3 | 运行 `/bin/sh scripts/package-release.sh v0.1.0` | 生成 DMG 和 SHA-256 文件，命令无警告性失败 | 通过 |
+| 1 | 运行 `/bin/sh scripts/validate-release-version.sh v0.1.1` | 标签与 App `MARKETING_VERSION=0.1.1` 一致，校验通过 | 通过 |
+| 2 | 使用一个不匹配标签运行版本校验 | 在构建原生依赖前失败，不产生 DMG | 通过；使用 `v0.1.0` 验证 |
+| 3 | 运行 `/bin/sh scripts/package-release.sh v0.1.1` | 生成 DMG 和 SHA-256 文件，命令无警告性失败 | 通过 |
 | 4 | 对 App 主程序和 Universal 原生静态库运行 `lipo -archs` | 均同时包含 `arm64` 与 `x86_64` | 通过；App、FarframeCore 和原生聚合库均含两个架构 |
 | 5 | 运行 `codesign --verify --deep --strict` 和 `hdiutil verify` | ad-hoc 签名和 DMG 结构有效 | 通过 |
 | 6 | 挂载 DMG，将 App 拖入 Applications 并启动 | App 能启动；系统可能因未公证显示 Gatekeeper 警告，该限制如实披露 | 待执行 |
@@ -42,7 +42,10 @@
 - 原生 ASan/UBSan Bridge harness：通过。
 - Release 安全设置、静态 channel add-in、ad-hoc 签名和 DMG 校验：通过。
 - Apple Silicon 与 Intel slice 均成功编译、链接；Apple Silicon GUI 安装验收与 Intel 实机运行尚未执行。
-- GitHub tag Action 尚未执行，等待本地改动提交并推送后记录结果。
+- GitHub `v0.1.0` tag Action 已执行并失败：CMake 选择 Ninja 后，脚本错误地用 Ninja 调用 OpenH264 的 Makefile；版本校验和工具检查均已通过。失败运行：`32323923548`。
+- 修复策略：OpenH264 始终使用 `make`，FreeRDP 的 CMake 构建工具仍由生成器决定；不改写已推送的 `v0.1.0` 标签，使用 `v0.1.1` 重新验证。
+- `/bin/sh scripts/package-release.sh v0.1.1`：通过；双架构原生依赖从新配方完整重建，生成 `FarframeRDP-0.1.1-universal.dmg` 与 SHA-256。
+- 0.1.1 App 架构：`x86_64 arm64`；严格 codesign 校验、DMG 校验和 SHA-256 校验均通过。
 
 ## 清理与恢复
 
