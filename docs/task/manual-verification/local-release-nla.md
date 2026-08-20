@@ -64,6 +64,9 @@ Hardened Runtime 没有改变 TLS、NLA 或证书信任策略。
   分别从候选 App 与 DMG 安装版本完成真实 NLA 连接，均可正常建立会话。
 - `v0.1.9` 本地发布候选：版本、Xcode build `17C52`、SDK `macosx26.2`、`x86_64`/`arm64`
   架构、ad-hoc 签名和 SHA-256 均已校验通过；功能行为由上一项相同工具链候选的真实连接覆盖。
+- `v0.1.9` GitHub Action：已成功完成并创建非 Draft、非 prerelease 的正式 Release。下载后的远端
+  DMG 已通过 SHA-256、版本、Xcode build `17C52`、SDK `macosx26.2`、Universal 架构与严格签名
+  校验；该远端产物的真实 NLA 连接尚待测试人员执行。
 
 ## 已知限制与后续门槛
 
