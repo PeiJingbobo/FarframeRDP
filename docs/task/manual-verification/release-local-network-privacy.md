@@ -46,7 +46,7 @@
 
 ## 当前执行状态
 
-- 自动化检查：已通过。Core、App 和 Bridge 测试共 117 项通过，其中包含 `NSLocalNetworkUsageDescription` 的回归断言；Release 安全设置检查通过。
+- 自动化检查：已通过。Core、App 和 Bridge 测试共 131 项通过，其中包含 `NSLocalNetworkUsageDescription` 的回归断言；Release 安全设置检查通过。
 - DMG 内 Info.plist 与架构检查：已通过。v0.1.7 DMG 内 App 的版本为 0.1.7，Bundle ID 为 `com.farframe.rdp`，包含本地网络用途说明，主程序同时包含 arm64 与 x86_64；临时签名严格校验通过，DMG 校验和通过，启动后持续运行 8 秒。
 - macOS 授权提示与真实 Windows RDP 连接：未执行，需要测试人员在具备局域网主机的图形会话中完成。
 
