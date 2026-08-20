@@ -4,7 +4,7 @@
 
 - 任务标识：universal-release-packaging
 - 范围：Farframe RDP 0.1.x Universal 2、未公证 DMG 和 tag 触发 GitHub Action
-- 当前状态：0.1.2 本地自动化与 DMG 结构验证通过；Action 已发现并修复 OpenH264 工具与 Xcode runner 版本差异；0.1.2 Action 与 Intel 实机待执行
+- 当前状态：0.1.3 本地自动化与 DMG 结构验证通过；Action 已发现并修复 OpenH264 工具、Xcode runner 与可选系统依赖探测差异；0.1.3 Action 与 Intel 实机待执行
 
 ## 前置条件与安全测试数据
 
@@ -17,9 +17,9 @@
 
 | 步骤 | 操作 | 预期结果 | 状态 |
 | --- | --- | --- | --- |
-| 1 | 运行 `/bin/sh scripts/validate-release-version.sh v0.1.2` | 标签与 App `MARKETING_VERSION=0.1.2` 一致，校验通过 | 通过 |
+| 1 | 运行 `/bin/sh scripts/validate-release-version.sh v0.1.3` | 标签与 App `MARKETING_VERSION=0.1.3` 一致，校验通过 | 通过 |
 | 2 | 使用一个不匹配标签运行版本校验 | 在构建原生依赖前失败，不产生 DMG | 通过；使用 `v0.1.0` 验证 |
-| 3 | 运行 `/bin/sh scripts/package-release.sh v0.1.2` | 生成 DMG 和 SHA-256 文件，命令无警告性失败 | 通过 |
+| 3 | 运行 `/bin/sh scripts/package-release.sh v0.1.3` | 生成 DMG 和 SHA-256 文件，命令无警告性失败 | 通过 |
 | 4 | 对 App 主程序和 Universal 原生静态库运行 `lipo -archs` | 均同时包含 `arm64` 与 `x86_64` | 通过；App、FarframeCore 和原生聚合库均含两个架构 |
 | 5 | 运行 `codesign --verify --deep --strict` 和 `hdiutil verify` | ad-hoc 签名和 DMG 结构有效 | 通过 |
 | 6 | 挂载 DMG，将 App 拖入 Applications 并启动 | App 能启动；系统可能因未公证显示 Gatekeeper 警告，该限制如实披露 | 待执行 |
@@ -49,6 +49,9 @@
 - GitHub `v0.1.1` Action 已越过双架构原生依赖构建，在 Xcode 编译阶段失败。runner 的 Xcode 16.4/SDK 15.5 无法编译项目使用的 SDK 26 SwiftUI API，且 Swift 6 诊断与本地 Xcode 26.2 不一致；失败运行：`32324493771`。
 - runner 修复：Release 改用提供 Xcode 26 的 `macos-26`，与项目实际最低编译工具链对齐；不改写 `v0.1.1`，使用 `v0.1.2` 验证。
 - `/bin/sh scripts/package-release.sh v0.1.2`：通过；生成 `FarframeRDP-0.1.2-universal.dmg` 与 SHA-256，Xcode 26.2 Release 构建和 DMG 校验通过。
+- GitHub `v0.1.2` Action 已通过 Xcode 26 源码编译，在 x86_64 最终链接失败：runner 预装的 `json-c` 被 FreeRDP 自动探测并引用，但未进入项目聚合静态库；失败运行：`32324960145`。
+- 原生依赖修复：显式设置 `WITH_JSON_DISABLED=ON`。当前集成不使用该可选能力，禁用环境相关的自动探测可保证本地和 CI 产物配置一致；不改写 `v0.1.2`，使用 `v0.1.3` 验证。
+- `/bin/sh scripts/package-release.sh v0.1.3`：通过；双架构依赖按禁用 JSON 自动探测的新配方完整重建，Release App 链接、签名与 DMG 校验通过。
 
 ## 清理与恢复
 

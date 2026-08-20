@@ -70,7 +70,7 @@ stamp_file="$artifact_root/build-manifest.txt"
 
 expected_manifest=$(cat <<EOF
 platform=$platform
-build_recipe=16
+build_recipe=17
 deployment_target=14.0
 system_processor=$system_processor
 with_simd=OFF
@@ -304,6 +304,7 @@ MACOSX_DEPLOYMENT_TARGET=14.0 "$cmake_bin" \
     -DWITH_MBEDTLS=OFF \
     -DWITH_OPENH264=ON \
     -DWITH_OPENH264_LOADING=OFF \
+    -DWITH_JSON_DISABLED=ON \
     -DWITH_FFMPEG=OFF \
     -DWITH_SWSCALE=OFF \
     -DWITH_SIMD=OFF \
