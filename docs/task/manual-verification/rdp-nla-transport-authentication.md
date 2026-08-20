@@ -37,6 +37,9 @@
 - `xcodebuild ... test`：FarframeCore 14 项、FarframeRDP 107 项、Bridge 9 项通过，0 失败。
 - `/bin/sh scripts/package-release.sh v0.1.6`：通过；版本匹配、Universal `x86_64 arm64`、严格 ad-hoc 签名、静态 add-in 与 DMG 校验均通过。
 - 从本地 DMG 直接启动 Apple Silicon slice 并保持运行 8 秒：通过；Bundle 版本为 0.1.6，签名严格校验通过。
+- GitHub `v0.1.6` Action：通过；运行 `32333113258`，耗时 5 分 53 秒，版本校验、Universal DMG 打包和正式 Release 发布均成功。
+- 正式 Release：`draft=false`、`prerelease=false`；DMG 与 SHA-256 两个资产均为 `uploaded`。
+- 重新下载远端 DMG 后：SHA-256 与 `hdiutil verify` 通过，App 为 `x86_64 arm64`，Bundle 版本为 0.1.6，严格签名校验通过；Apple Silicon 启动保持运行 8 秒。
 - 真实 Windows TLS/NLA：未执行；本地环境没有可安全自动使用的测试端点和凭据。
 
 ## 证据记录
