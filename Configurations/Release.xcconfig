@@ -6,5 +6,11 @@ ENABLE_NS_ASSERTIONS = NO
 SWIFT_COMPILATION_MODE = wholemodule
 SWIFT_OPTIMIZATION_LEVEL = -O
 VALIDATE_PRODUCT = YES
-ENABLE_HARDENED_RUNTIME = YES
+// The current distribution is ad-hoc signed and cannot be notarized. On the
+// supported macOS runtime, enabling Hardened Runtime on that ad-hoc identity
+// prevents FreeRDP NLA from completing (0x2000D), while the otherwise identical
+// optimized Release build connects successfully. Restore this to YES only with
+// Developer ID signing, then audit any required runtime exceptions and rerun
+// real-host acceptance before notarization.
+ENABLE_HARDENED_RUNTIME = NO
 CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO

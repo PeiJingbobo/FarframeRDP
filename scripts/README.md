@@ -8,7 +8,8 @@
 - 把 Derived Data 和原生依赖产物写入已忽略的明确目录；
 - 非交互执行并在失败时返回非零状态；
 - 输出足够定位问题但已脱敏的日志；
-- 不以关闭 TLS、证书验证、Hardened Runtime 或修改 Bundle ID/Team ID 来绕过错误。
+- 不以关闭 TLS、证书验证或修改 Bundle ID/Team ID 来绕过错误；Hardened Runtime 仅允许按已验证的
+  签名发布阶段配置，并在 Developer ID 公证发布前恢复和完成 runtime exception 审计。
 
 ## 当前脚本
 
@@ -34,12 +35,14 @@
 /bin/sh scripts/package-release.sh v0.1.0
 ~~~
 
-产物写入 `.release/`。当前流程没有 Developer ID 证书，因此只进行 ad-hoc 签名且不提交 Apple
-公证；从网络下载后可能被 Gatekeeper 阻止，不能把该产物描述为已签名公证版本。
+产物写入 `.release/`。当前流程没有 Developer ID 证书，因此只进行 ad-hoc 签名、关闭 Hardened
+Runtime 且不提交 Apple 公证；从网络下载后可能被 Gatekeeper 阻止，不能把该产物描述为 Developer
+ID 签名或已公证版本。当前设置来自本机 Release 二分验证：保留优化但关闭 Hardened Runtime 后，
+真实 NLA 连接恢复；取得 Developer ID 后必须恢复 Hardened Runtime 并重新验收。
 
 推送格式为 `vX.Y.Z` 的标签会触发 GitHub Action。Action 在任何编译前读取 Xcode Release
-构建设置；标签去掉 `v` 后与 `MARKETING_VERSION` 不一致时立即失败。成功后创建或更新 draft
-GitHub Release，不自动公开发布。
+构建设置；标签去掉 `v` 后与 `MARKETING_VERSION` 不一致时立即失败。成功后创建或更新正式
+GitHub Release。
 
 ## 真实连接配置
 

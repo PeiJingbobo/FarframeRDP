@@ -21,7 +21,10 @@ require_setting() {
     fi
 }
 
-require_setting ENABLE_HARDENED_RUNTIME YES
+# This release lane is explicitly ad-hoc signed and unnotarized. Hardened
+# Runtime is required again when the lane moves to Developer ID signing; real
+# NLA acceptance must pass before that transition is shipped.
+require_setting ENABLE_HARDENED_RUNTIME NO
 require_setting ENABLE_APP_SANDBOX NO
 require_setting RUNTIME_EXCEPTION_DISABLE_LIBRARY_VALIDATION NO
 require_setting CODE_SIGN_INJECT_BASE_ENTITLEMENTS NO

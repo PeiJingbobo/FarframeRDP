@@ -85,7 +85,10 @@ FARFRAME_CONFIGURATION=Sanitizer /bin/sh scripts/build.sh
 .derivedData，并为普通无头构建设置 CODE_SIGNING_ALLOWED=NO。可以通过
 FARFRAME_DERIVED_DATA_PATH 指定其他 Derived Data 目录。
 
-首个发布版本为 `0.1.0`。在没有 Developer ID 证书时，可生成 ad-hoc 签名、未公证的 Universal DMG：
+首个发布版本为 `0.1.0`。在没有 Developer ID 证书时，可生成 ad-hoc 签名、未公证的 Universal DMG。
+当前 ad-hoc 发布配置关闭 Hardened Runtime；本机对比验证表明，相同 Release 优化下启用它会导致
+FreeRDP NLA 在认证阶段以 `0x2000D` 失败。取得 Developer ID 后，必须恢复 Hardened Runtime、审计所需
+runtime exception，并重新执行真实 Windows 主机验收后才能公证：
 
 ~~~sh
 /bin/sh scripts/package-release.sh v0.1.0
