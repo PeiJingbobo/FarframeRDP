@@ -1,0 +1,63 @@
+name: Package Universal Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Build Universal DMG
+    runs-on: macos-15
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - name: Validate tag and app version
+        env:
+          FARFRAME_RELEASE_TAG: ${{ github.ref_name }}
+        run: /bin/sh scripts/validate-release-version.sh "$FARFRAME_RELEASE_TAG"
+
+      - name: Check required build tools
+        run: |
+          xcodebuild -version
+          cmake --version
+          if command -v ninja >/dev/null 2>&1; then
+            ninja --version
+          else
+            make --version
+          fi
+
+      - name: Build and package Universal DMG
+        env:
+          FARFRAME_RELEASE_TAG: ${{ github.ref_name }}
+          FARFRAME_DERIVED_DATA_PATH: ${{ github.workspace }}/.derivedData-action-release
+        run: /bin/sh scripts/package-release.sh "$FARFRAME_RELEASE_TAG"
+
+      - name: Create or update draft GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version=${RELEASE_TAG#v}
+          dmg=".release/FarframeRDP-${version}-universal.dmg"
+          checksum="${dmg}.sha256"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$dmg" "$checksum" --clobber
+          else
+            gh release create "$RELEASE_TAG" "$dmg" "$checksum" \
+              --draft \
+              --generate-notes \
+              --title "Farframe RDP $version"
+          fi

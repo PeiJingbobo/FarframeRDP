@@ -3,6 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 project_root=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
+architecture=$(uname -m)
 config_path=${FARFRAME_INTEGRATION_CONFIG:-"$project_root/config/local/integration.json"}
 
 /bin/sh "$script_dir/build-native-dependencies.sh"
@@ -36,7 +37,7 @@ case "$certificate_decision" in
         ;;
 esac
 
-artifact_root="$project_root/third-party/artifacts/macos-arm64"
+artifact_root="$project_root/third-party/artifacts/macos-$architecture"
 output_dir="$project_root/third-party/build/connection-integration"
 test_binary="$output_dir/FarframeRDPConnectionIntegration"
 mkdir -p "$output_dir"
@@ -46,7 +47,7 @@ macos_sdk=$(xcrun --sdk macosx --show-sdk-path)
 "$clang_bin" \
     -isysroot "$macos_sdk" \
     -std=c11 \
-    -arch arm64 \
+    -arch "$architecture" \
     -mmacosx-version-min=14.0 \
     -Wall -Wextra -Werror \
     -I"$project_root/Sources/FarframeRDPBridge/include" \

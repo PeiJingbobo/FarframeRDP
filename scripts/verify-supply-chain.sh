@@ -11,8 +11,8 @@ sbom="$project_root/third-party/sbom.spdx"
 freerdp_license="$project_root/third-party/licenses/FreeRDP-Apache-2.0.txt"
 openssl_license="$project_root/third-party/licenses/OpenSSL-Apache-2.0.txt"
 openh264_license="$project_root/third-party/licenses/OpenH264-BSD-2-Clause.txt"
-artifact_manifest="$project_root/third-party/artifacts/macos-arm64/build-manifest.txt"
-aggregate_archive="$project_root/third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a"
+artifact_manifest="$project_root/third-party/artifacts/macos-universal/build-manifest.txt"
+aggregate_archive="$project_root/third-party/artifacts/macos-universal/lib/libFarframeRDPDependencies.a"
 
 fail() {
     echo "error: $*" >&2
@@ -61,6 +61,11 @@ if [ -f "$artifact_manifest" ]; then
     assert_line "$artifact_manifest" "openh264_version=$FARFRAME_OPENH264_VERSION"
     assert_line "$artifact_manifest" "openh264_commit=$FARFRAME_OPENH264_COMMIT"
     [ -f "$aggregate_archive" ] || fail "build manifest exists but aggregate native archive is missing"
+    architectures=$(xcrun lipo -archs "$aggregate_archive")
+    case "$architectures" in
+        "arm64 x86_64"|"x86_64 arm64") ;;
+        *) fail "native dependency archive is not Universal: $architectures" ;;
+    esac
     echo "Verified pinned inputs, SPDX SBOM, licenses, and native artifact manifest"
 else
     echo "Verified pinned inputs, SPDX SBOM, and licenses (native artifacts not present)"

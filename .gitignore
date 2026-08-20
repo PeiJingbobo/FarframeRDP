@@ -9,7 +9,7 @@ AGENTS.md
 .claude/
 .codex/
 .cursor/
-.github/
+.github/skills/
 .agents/
 .aider/
 .continue/
@@ -21,6 +21,7 @@ DerivedData/
 .derivedData/
 .derivedData-*/
 build/
+.release/
 *.xcuserstate
 xcuserdata/
 *.xccheckout

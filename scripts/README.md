@@ -12,14 +12,34 @@
 
 ## 当前脚本
 
-- **build-native-dependencies.sh**：获取固定提交并构建 arm64 静态 FreeRDP/WinPR/OpenSSL。
+- **build-native-dependencies.sh**：按 `FARFRAME_ARCH=arm64|x86_64` 获取固定提交并构建单架构静态 FreeRDP/WinPR/OpenSSL/OpenH264。
+- **build-universal-native-dependencies.sh**：构建两套单架构依赖并合并为 Universal 2 静态库。
+- **validate-release-version.sh**：校验 `vX.Y.Z` 发布标签与 App Release `MARKETING_VERSION` 完全一致。
+- **package-release.sh**：生成 ad-hoc 签名、未公证的 Universal 2 DMG 和 SHA-256 文件。
 - **test-native-bridge.sh**：使用 ASan/UBSan 运行独立 Bridge 所有权与线程 harness。
 - **test-rdp-integration.sh**：只从 Git 忽略的本地 JSON 读取端点、临时凭据和证书决定，编译并运行真实连接 harness。
 - **build.sh**：先确保原生依赖存在，再构建 FarframeRDP scheme；默认 Debug。
 - **test.sh**：先确保原生依赖存在，再运行 Core、App 和 Bridge 三个测试 target；默认 Debug。
 - **FARFRAME_CONFIGURATION**：可选 Debug、Release 或 Sanitizer。
 - **FARFRAME_DERIVED_DATA_PATH**：可覆盖默认的项目内 .derivedData。
-- **FARFRAME_CMAKE**、**FARFRAME_NINJA**：工具不在 PATH 时指定其可执行文件。
+- **FARFRAME_CMAKE**、**FARFRAME_NINJA**：工具不在 PATH 时指定其可执行文件；未显式指定生成器且
+  Ninja 不存在时，原生依赖构建自动使用系统 `make`。
+- **FARFRAME_RELEASE_TAG**：打包时必须提供的稳定标签，例如 `v0.1.0`。
+
+## Universal Release 打包
+
+首个版本基数为 `0.1.0`，对应标签必须是 `v0.1.0`。本地打包命令：
+
+~~~sh
+/bin/sh scripts/package-release.sh v0.1.0
+~~~
+
+产物写入 `.release/`。当前流程没有 Developer ID 证书，因此只进行 ad-hoc 签名且不提交 Apple
+公证；从网络下载后可能被 Gatekeeper 阻止，不能把该产物描述为已签名公证版本。
+
+推送格式为 `vX.Y.Z` 的标签会触发 GitHub Action。Action 在任何编译前读取 Xcode Release
+构建设置；标签去掉 `v` 后与 `MARKETING_VERSION` 不一致时立即失败。成功后创建或更新 draft
+GitHub Release，不自动公开发布。
 
 ## 真实连接配置
 

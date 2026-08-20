@@ -7,10 +7,31 @@ project_root=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
 # shellcheck source=../third-party/versions.sh
 . "$project_root/third-party/versions.sh"
 
-if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
-    echo "error: native dependencies currently support macOS arm64 only" >&2
+if [ "$(uname -s)" != Darwin ]; then
+    echo "error: native dependencies require macOS" >&2
     exit 1
 fi
+
+architecture=${FARFRAME_ARCH:-$(uname -m)}
+case "$architecture" in
+    arm64)
+        openssl_target=darwin64-arm64-cc
+        system_processor=aarch64
+        openh264_use_asm=Yes
+        ;;
+    x86_64)
+        openssl_target=darwin64-x86_64-cc
+        system_processor=x86_64
+        # The release recipe must not depend on a machine-global NASM install.
+        # OpenH264's portable implementation is sufficient for the first
+        # Universal release and keeps native builds reproducible on CI.
+        openh264_use_asm=No
+        ;;
+    *)
+        echo "error: unsupported FARFRAME_ARCH: $architecture" >&2
+        exit 1
+        ;;
+esac
 
 find_tool() {
     variable_name=$1
@@ -34,8 +55,9 @@ find_tool() {
 }
 
 source_root="$project_root/third-party/sources"
-build_root="$project_root/third-party/build/macos-arm64"
-artifact_root="$project_root/third-party/artifacts/macos-arm64"
+platform="macos-$architecture"
+build_root="$project_root/third-party/build/$platform"
+artifact_root="$project_root/third-party/artifacts/$platform"
 openssl_source="$source_root/openssl"
 openh264_source="$source_root/openh264"
 freerdp_source="$source_root/freerdp"
@@ -47,11 +69,12 @@ combined_lib="$artifact_root/lib/libFarframeRDPDependencies.a"
 stamp_file="$artifact_root/build-manifest.txt"
 
 expected_manifest=$(cat <<EOF
-platform=macos-arm64
-build_recipe=12
+platform=$platform
+build_recipe=15
 deployment_target=14.0
-system_processor=aarch64
+system_processor=$system_processor
 with_simd=OFF
+openh264_use_asm=$openh264_use_asm
 channel_audin=ON
 channel_cliprdr=ON
 channel_disp=ON
@@ -80,7 +103,13 @@ if [ -f "$stamp_file" ] && [ -f "$combined_lib" ] &&
     exit 0
 fi
 cmake_bin=$(find_tool FARFRAME_CMAKE cmake)
-cmake_generator=${FARFRAME_CMAKE_GENERATOR:-Ninja}
+if [ -n "${FARFRAME_CMAKE_GENERATOR:-}" ]; then
+    cmake_generator=$FARFRAME_CMAKE_GENERATOR
+elif command -v ninja >/dev/null 2>&1; then
+    cmake_generator=Ninja
+else
+    cmake_generator="Unix Makefiles"
+fi
 case "$cmake_generator" in
     Ninja)
         build_tool_bin=$(find_tool FARFRAME_NINJA ninja)
@@ -157,7 +186,7 @@ else
 fi
 
 openssl_stamp="$openssl_prefix/.farframe-build-commit"
-openssl_expected_stamp="$FARFRAME_OPENSSL_COMMIT macos-arm64 deployment-target-14.0"
+openssl_expected_stamp="$FARFRAME_OPENSSL_COMMIT $platform deployment-target-14.0"
 if [ ! -f "$openssl_stamp" ] || [ "$(cat "$openssl_stamp")" != "$openssl_expected_stamp" ]; then
     openssl_build="$build_root/openssl"
     rm -rf "$openssl_build" "$openssl_prefix"
@@ -168,7 +197,7 @@ if [ ! -f "$openssl_stamp" ] || [ "$(cat "$openssl_stamp")" != "$openssl_expecte
         export MACOSX_DEPLOYMENT_TARGET=14.0
         export CFLAGS="-mmacosx-version-min=14.0"
         "$openssl_source/Configure" \
-            darwin64-arm64-cc \
+            "$openssl_target" \
             no-shared \
             no-tests \
             no-docs \
@@ -181,15 +210,23 @@ if [ ! -f "$openssl_stamp" ] || [ "$(cat "$openssl_stamp")" != "$openssl_expecte
 fi
 
 openh264_stamp="$openh264_prefix/.farframe-build-commit"
-openh264_expected_stamp="$FARFRAME_OPENH264_COMMIT macos-arm64 deployment-target-14.0"
+openh264_expected_stamp="$FARFRAME_OPENH264_COMMIT $platform deployment-target-14.0 use-asm-$openh264_use_asm isolated-source explicit-compiler-arch"
 if [ ! -f "$openh264_stamp" ] ||
    [ "$(cat "$openh264_stamp")" != "$openh264_expected_stamp" ]; then
-    rm -rf "$openh264_prefix"
-    mkdir -p "$openh264_prefix"
+    openh264_build="$build_root/openh264"
+    rm -rf "$openh264_build" "$openh264_prefix"
+    openh264_build_source="$openh264_build/source"
+    mkdir -p "$openh264_build_source" "$openh264_prefix"
+    git -C "$openh264_source" archive --format=tar "$FARFRAME_OPENH264_COMMIT" |
+        tar -xf - -C "$openh264_build_source"
     MACOSX_DEPLOYMENT_TARGET=14.0 "$build_tool_bin" \
-        -C "$openh264_source" \
+        -C "$openh264_build_source" \
         -j"$(sysctl -n hw.logicalcpu)" \
-        ARCH=arm64 \
+        CC="clang -arch $architecture" \
+        CXX="clang++ -arch $architecture" \
+        CCAS="clang -arch $architecture" \
+        ARCH="$architecture" \
+        USE_ASM="$openh264_use_asm" \
         BUILDTYPE=Release \
         PREFIX="$openh264_prefix" \
         install-static
@@ -206,9 +243,9 @@ MACOSX_DEPLOYMENT_TARGET=14.0 "$cmake_bin" \
     -DCMAKE_MAKE_PROGRAM="$build_tool_bin" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$freerdp_prefix" \
-    -DCMAKE_OSX_ARCHITECTURES=arm64 \
+    -DCMAKE_OSX_ARCHITECTURES="$architecture" \
     -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-    -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+    -DCMAKE_SYSTEM_PROCESSOR="$system_processor" \
     -DCMAKE_PREFIX_PATH="$openssl_prefix;$openh264_prefix" \
     -DOPENSSL_ROOT_DIR="$openssl_prefix" \
     -DOPENSSL_USE_STATIC_LIBS=TRUE \
@@ -296,6 +333,12 @@ fi
 archives=$(cat "$archive_list")
 # shellcheck disable=SC2086
 xcrun libtool -static -o "$combined_lib" $archives
+
+archive_architectures=$(xcrun lipo -archs "$combined_lib")
+if [ "$archive_architectures" != "$architecture" ]; then
+    echo "error: $platform aggregate archive contains unexpected architectures: $archive_architectures" >&2
+    exit 1
+fi
 
 printf '%s\n' "$expected_manifest" > "$stamp_file"
 echo "Built native dependencies: $artifact_root"

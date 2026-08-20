@@ -15,8 +15,8 @@
 		100000000000000000000006 /* libFarframeRDPBridge.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 210000000000000000000003 /* libFarframeRDPBridge.a */; };
 		100000000000000000000007 /* FarframeCore.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 210000000000000000000002 /* FarframeCore.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		100000000000000000000008 /* libFarframeRDPBridge.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 210000000000000000000003 /* libFarframeRDPBridge.a */; };
-		100000000000000000000009 /* third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 230000000000000000000001 /* third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a */; };
-		100000000000000000000010 /* third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 230000000000000000000001 /* third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a */; };
+		100000000000000000000009 /* third-party/artifacts/macos-universal/lib/libFarframeRDPDependencies.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 230000000000000000000001 /* third-party/artifacts/macos-universal/lib/libFarframeRDPDependencies.a */; };
+		100000000000000000000010 /* third-party/artifacts/macos-universal/lib/libFarframeRDPDependencies.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 230000000000000000000001 /* third-party/artifacts/macos-universal/lib/libFarframeRDPDependencies.a */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -83,7 +83,7 @@
 		210000000000000000000005 /* FarframeRDPTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FarframeRDPTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		210000000000000000000006 /* FarframeRDPBridgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FarframeRDPBridgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		220000000000000000000001 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
-		230000000000000000000001 /* third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = "third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a"; sourceTree = SOURCE_ROOT; };
+		230000000000000000000001 /* third-party/artifacts/macos-universal/lib/libFarframeRDPDependencies.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = "third-party/artifacts/macos-universal/lib/libFarframeRDPDependencies.a"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -102,7 +102,7 @@
 			files = (
 				100000000000000000000001 /* FarframeCore.framework in Frameworks */,
 				100000000000000000000008 /* libFarframeRDPBridge.a in Frameworks */,
-				100000000000000000000009 /* third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a in Frameworks */,
+				100000000000000000000009 /* third-party/artifacts/macos-universal/lib/libFarframeRDPDependencies.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -143,7 +143,7 @@
 			files = (
 				100000000000000000000005 /* XCTest.framework in Frameworks */,
 				100000000000000000000006 /* libFarframeRDPBridge.a in Frameworks */,
-				100000000000000000000010 /* third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a in Frameworks */,
+				100000000000000000000010 /* third-party/artifacts/macos-universal/lib/libFarframeRDPDependencies.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -180,7 +180,7 @@
 			isa = PBXGroup;
 			children = (
 				220000000000000000000001 /* XCTest.framework */,
-				230000000000000000000001 /* third-party/artifacts/macos-arm64/lib/libFarframeRDPDependencies.a */,
+				230000000000000000000001 /* third-party/artifacts/macos-universal/lib/libFarframeRDPDependencies.a */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -521,7 +521,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-arm64/lib";
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-universal/lib";
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",
@@ -567,7 +567,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-arm64/lib";
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-universal/lib";
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",
@@ -613,7 +613,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-arm64/lib";
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-universal/lib";
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",
@@ -690,8 +690,8 @@
 				DEFINES_MODULE = YES;
 				HEADER_SEARCH_PATHS = (
 					"$(SRCROOT)/Sources/FarframeRDPBridge/include",
-					"$(SRCROOT)/third-party/artifacts/macos-arm64/freerdp/include/freerdp3",
-					"$(SRCROOT)/third-party/artifacts/macos-arm64/freerdp/include/winpr3",
+					"$(SRCROOT)/third-party/artifacts/macos-universal/freerdp/include/freerdp3",
+					"$(SRCROOT)/third-party/artifacts/macos-universal/freerdp/include/winpr3",
 				);
 				PRODUCT_NAME = FarframeRDPBridge;
 				SKIP_INSTALL = YES;
@@ -704,8 +704,8 @@
 				DEFINES_MODULE = YES;
 				HEADER_SEARCH_PATHS = (
 					"$(SRCROOT)/Sources/FarframeRDPBridge/include",
-					"$(SRCROOT)/third-party/artifacts/macos-arm64/freerdp/include/freerdp3",
-					"$(SRCROOT)/third-party/artifacts/macos-arm64/freerdp/include/winpr3",
+					"$(SRCROOT)/third-party/artifacts/macos-universal/freerdp/include/freerdp3",
+					"$(SRCROOT)/third-party/artifacts/macos-universal/freerdp/include/winpr3",
 				);
 				PRODUCT_NAME = FarframeRDPBridge;
 				SKIP_INSTALL = YES;
@@ -718,8 +718,8 @@
 				DEFINES_MODULE = YES;
 				HEADER_SEARCH_PATHS = (
 					"$(SRCROOT)/Sources/FarframeRDPBridge/include",
-					"$(SRCROOT)/third-party/artifacts/macos-arm64/freerdp/include/freerdp3",
-					"$(SRCROOT)/third-party/artifacts/macos-arm64/freerdp/include/winpr3",
+					"$(SRCROOT)/third-party/artifacts/macos-universal/freerdp/include/freerdp3",
+					"$(SRCROOT)/third-party/artifacts/macos-universal/freerdp/include/winpr3",
 				);
 				PRODUCT_NAME = FarframeRDPBridge;
 				SKIP_INSTALL = YES;
@@ -801,7 +801,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/Sources/FarframeRDPBridge/include";
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-arm64/lib";
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-universal/lib";
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",
@@ -837,7 +837,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/Sources/FarframeRDPBridge/include";
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-arm64/lib";
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-universal/lib";
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",
@@ -873,7 +873,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/Sources/FarframeRDPBridge/include";
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-arm64/lib";
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/third-party/artifacts/macos-universal/lib";
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",

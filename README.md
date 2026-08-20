@@ -81,8 +81,18 @@ FARFRAME_CONFIGURATION=Release /bin/sh scripts/build.sh
 FARFRAME_CONFIGURATION=Sanitizer /bin/sh scripts/build.sh
 ~~~
 
-脚本默认使用 arm64、FarframeRDP scheme、项目内已忽略的 .derivedData，并为无头构建设置
-CODE_SIGNING_ALLOWED=NO。可以通过 FARFRAME_DERIVED_DATA_PATH 指定其他 Derived Data 目录。
+脚本默认构建 arm64 与 x86_64 原生依赖和 Universal 2 App，使用 FarframeRDP scheme、项目内已忽略的
+.derivedData，并为普通无头构建设置 CODE_SIGNING_ALLOWED=NO。可以通过
+FARFRAME_DERIVED_DATA_PATH 指定其他 Derived Data 目录。
+
+首个发布版本为 `0.1.0`。在没有 Developer ID 证书时，可生成 ad-hoc 签名、未公证的 Universal DMG：
+
+~~~sh
+/bin/sh scripts/package-release.sh v0.1.0
+~~~
+
+推送 `vX.Y.Z` 标签会触发 GitHub Action；标签版本必须与 App 的 `MARKETING_VERSION` 完全一致，
+成功产物进入 draft GitHub Release。
 
 Xcode Sanitizer 应用构建仍受 Phase 1 记录的 XCTest 引导限制；Phase 2 已增加独立原生
 ASan/UBSan harness 并验证 Bridge 所有权。详情见

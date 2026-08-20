@@ -6,13 +6,13 @@ project_root=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
 configuration=${FARFRAME_CONFIGURATION:-Debug}
 derived_data=${FARFRAME_DERIVED_DATA_PATH:-"$project_root/.derivedData"}
 
-/bin/sh "$script_dir/build-native-dependencies.sh"
+/bin/sh "$script_dir/build-universal-native-dependencies.sh"
 
 exec xcodebuild \
     -project "$project_root/FarframeRDP.xcodeproj" \
     -scheme FarframeRDP \
     -configuration "$configuration" \
-    -destination 'platform=macOS,arch=arm64' \
+    -destination 'platform=macOS' \
     -derivedDataPath "$derived_data" \
     CODE_SIGNING_ALLOWED=NO \
     build

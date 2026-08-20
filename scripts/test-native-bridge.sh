@@ -3,10 +3,11 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 project_root=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
+architecture=$(uname -m)
 
 /bin/sh "$script_dir/build-native-dependencies.sh"
 
-artifact_root="$project_root/third-party/artifacts/macos-arm64"
+artifact_root="$project_root/third-party/artifacts/macos-$architecture"
 output_dir="$project_root/third-party/build/native-bridge-tests"
 test_binary="$output_dir/FarframeRDPBridgeSanitizerTests"
 mkdir -p "$output_dir"
@@ -28,7 +29,7 @@ macos_sdk=$(xcrun --sdk macosx --show-sdk-path)
 "$sanitizer_clang" \
     -isysroot "$macos_sdk" \
     -std=c11 \
-    -arch arm64 \
+    -arch "$architecture" \
     -mmacosx-version-min=14.0 \
     -Wall -Wextra -Werror \
     -fsanitize=address,undefined \
