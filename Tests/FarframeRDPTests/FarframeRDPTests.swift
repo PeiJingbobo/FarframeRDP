@@ -165,6 +165,15 @@ final class FarframeRDPTests: XCTestCase {
         )
     }
 
+    func testApplicationDeclaresLocalNetworkPrivacyUsage() {
+        let usage = Bundle.main.object(forInfoDictionaryKey: "NSLocalNetworkUsageDescription") as? String
+
+        XCTAssertEqual(
+            usage,
+            "Farframe RDP 需要访问本地网络，以连接您选择的远程桌面电脑。"
+        )
+    }
+
     func testMicrophoneDeviceMenuKeepsDefaultAndUnavailableSavedSelection() {
         let options = MicrophoneDeviceMenuOption.options(
             availableDevices: [

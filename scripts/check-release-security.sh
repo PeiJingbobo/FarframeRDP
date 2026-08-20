@@ -36,6 +36,11 @@ if ! printf '%s\n' "$settings" | grep -Fq 'INFOPLIST_KEY_NSMicrophoneUsageDescri
     exit 1
 fi
 
+if ! printf '%s\n' "$settings" | grep -Fq 'INFOPLIST_KEY_NSLocalNetworkUsageDescription = '; then
+    echo "error: local network usage description is missing" >&2
+    exit 1
+fi
+
 if rg -n --glob '!third-party/**' --glob '!docs/**' \
     'IgnoreCertificate[^,]*,[[:space:]]*TRUE|CertificateCallback[[:space:]]*=[[:space:]]*NULL|TlsSecurity[^,]*,[[:space:]]*FALSE|NlaSecurity[^,]*,[[:space:]]*FALSE' \
     "$project_root/Sources" >/dev/null; then

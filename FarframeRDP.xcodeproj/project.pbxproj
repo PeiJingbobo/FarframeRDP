@@ -500,6 +500,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Farframe RDP";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Farframe RDP 需要访问本地网络，以连接您选择的远程桌面电脑。";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "启用麦克风重定向时，Farframe RDP 需要访问麦克风并将音频输入发送到当前远程会话。";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -546,6 +547,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Farframe RDP";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Farframe RDP 需要访问本地网络，以连接您选择的远程桌面电脑。";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "启用麦克风重定向时，Farframe RDP 需要访问麦克风并将音频输入发送到当前远程会话。";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -592,6 +594,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Farframe RDP";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Farframe RDP 需要访问本地网络，以连接您选择的远程桌面电脑。";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "启用麦克风重定向时，Farframe RDP 需要访问麦克风并将音频输入发送到当前远程会话。";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
