@@ -39,6 +39,9 @@
 - `/bin/sh scripts/test.sh`：Swift 107 项、Bridge 9 项通过，0 失败；静态 FreeRDP add-in 检查通过。
 - `/bin/sh scripts/package-release.sh v0.1.5`：通过；版本匹配、Universal `x86_64 arm64`、严格 ad-hoc 签名和 DMG 校验均通过。
 - 从本地 DMG 复制 App 后在 Apple Silicon 上直接启动并保持运行 8 秒：通过，无启动崩溃或 stderr。
+- GitHub `v0.1.5` Action：通过；运行 `32329175849`，耗时 7 分 46 秒，版本校验、Universal DMG 打包和正式 Release 发布均成功。
+- 正式 Release：`draft=false`、`prerelease=false`；DMG 与 SHA-256 两个资产均为 `uploaded`。
+- 重新下载远端 DMG 后：SHA-256 与 `hdiutil verify` 通过，App 为 `x86_64 arm64`，严格签名校验通过；Apple Silicon 启动保持运行 8 秒且无 stderr。
 - 真实 Windows TLS/NLA、旧 Profile、首次证书、错误/正确密码流程：未执行，等待操作者使用安全测试环境验证。
 
 ## 证据记录
