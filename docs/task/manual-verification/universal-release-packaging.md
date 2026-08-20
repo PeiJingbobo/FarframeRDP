@@ -4,7 +4,7 @@
 
 - 任务标识：universal-release-packaging
 - 范围：Farframe RDP 0.1.x Universal 2、未公证 DMG 和 tag 触发 GitHub Action
-- 当前状态：0.1.4 静态链接修复已通过本地打包、自动化测试和 DMG 独立路径启动验证；GitHub Action 与 Intel 实机待执行
+- 当前状态：0.1.4 静态链接修复已通过本地与 GitHub Action 打包、自动化测试、远端 DMG 下载及 Apple Silicon 启动验证；Intel 实机待执行
 
 ## 前置条件与安全测试数据
 
@@ -25,7 +25,7 @@
 | 6 | 挂载 DMG，将 App 拖入 Applications 并启动 | App 能启动；系统可能因未公证显示 Gatekeeper 警告，该限制如实披露 | 待执行 |
 | 7 | 在 Apple Silicon Mac 上完成基本启动、创建非秘密测试 Profile、关闭和重新打开 | 没有架构加载错误或启动崩溃 | 待执行 |
 | 8 | 在可运行 macOS 14 的 Intel Mac 上重复步骤 6–7 | 没有架构加载错误或启动崩溃 | 待执行 |
-| 9 | 推送版本匹配的新标签 | Action 成功，并创建包含 DMG 与 SHA-256 的正式 Release | 通过；`v0.1.3` 的构建和资产已验证，发布状态随后改为正式 |
+| 9 | 推送版本匹配的新标签 | Action 成功，并创建包含 DMG 与 SHA-256 的正式 Release | 通过；`v0.1.4` 正式 Release |
 | 10 | 推送版本不匹配的隔离测试标签 | Action 在版本校验阶段失败且不创建发布产物 | 待执行 |
 | 11 | 检查 App 的 `otool -L` 与 `Contents/Frameworks` | 不动态加载或嵌入 `FarframeCore.framework` | 通过；两个架构均只加载系统库/框架 |
 | 12 | 从 DMG 安装后在干净路径启动 App | App 保持运行且不产生 dyld Library Validation 崩溃 | 通过；Apple Silicon 上持续运行 8 秒后主动结束 |
@@ -64,6 +64,9 @@
 - `/bin/sh scripts/test.sh`：通过，共 128 项，0 失败、0 跳过（Core 14、App 105、Bridge 9）。
 - `scripts/check-release-security.sh`：通过；主程序签名仍含 Hardened Runtime `runtime` flag，未增加签名例外权限。
 - 从 0.1.4 DMG 挂载并复制到独立临时路径后直接启动：进程持续存活 8 秒，无 dyld Library Validation 崩溃；`Contents/Frameworks/FarframeCore.framework` 不存在，`otool -L` 不含 `@rpath/FarframeCore.framework`。
+- GitHub `v0.1.4` Action：通过；运行 `32327497181`，耗时 7 分 20 秒，正式 Release 创建成功。
+- 远端正式 Release：`draft=false`、`prerelease=false`；DMG 资产 13,499,373 字节，SHA-256 资产 98 字节，均为 uploaded。
+- 重新下载远端 0.1.4 DMG 后：SHA-256、严格 codesign、`x86_64 arm64`、无嵌入/动态 `FarframeCore` 均通过；Apple Silicon 上实际启动持续运行 8 秒后主动结束，无 stderr 或崩溃。
 
 ## 清理与恢复
 
