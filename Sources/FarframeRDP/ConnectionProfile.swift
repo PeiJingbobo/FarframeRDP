@@ -520,6 +520,21 @@ final class ConnectionProfile {
     }
 }
 
+@MainActor
+enum ConnectionProfilePersistence {
+    static func create(
+        draft: ConnectionProfileDraft,
+        in context: ModelContext,
+        now: Date = Date()
+    ) throws -> ConnectionProfile {
+        let validated = try draft.validated().draft
+        let profile = ConnectionProfile(draft: validated, now: now)
+        context.insert(profile)
+        try context.save()
+        return profile
+    }
+}
+
 enum FarframeSchemaV1: VersionedSchema {
     static let versionIdentifier = Schema.Version(1, 0, 0)
     static var models: [any PersistentModel.Type] {

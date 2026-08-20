@@ -65,6 +65,33 @@ struct ConnectionReconnectPolicy: Equatable, Sendable {
     }
 }
 
+enum SessionCertificateStore {
+    static func prepare(sessionID: UUID, fileManager: FileManager = .default) throws -> URL {
+        let directory = fileManager.temporaryDirectory
+            .appendingPathComponent("FarframeRDP-CertificateChecks", isDirectory: true)
+            .appendingPathComponent(sessionID.uuidString, isDirectory: true)
+        try fileManager.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+
+        var status = stat()
+        guard lstat(directory.path, &status) == 0,
+              status.st_mode & S_IFMT == S_IFDIR,
+              status.st_mode & S_IFMT != S_IFLNK,
+              chmod(directory.path, 0o700) == 0 else {
+            try? fileManager.removeItem(at: directory)
+            throw CocoaError(.fileWriteNoPermission)
+        }
+        return directory
+    }
+
+    static func remove(_ directory: URL, fileManager: FileManager = .default) {
+        try? fileManager.removeItem(at: directory)
+    }
+}
+
 private enum ConnectionWorkerEvent: Sendable {
     case phase(SessionPhase)
     case certificate(CertificateChallenge)
@@ -1482,10 +1509,19 @@ private final class ConnectionWorker: @unchecked Sendable {
             _ = FFRSessionDestroy(&ownedSession)
         }
 
-        let certificateStorePath = FileManager.default.temporaryDirectory
-            .appendingPathComponent("FarframeRDP-CertificateChecks", isDirectory: true)
-            .appendingPathComponent(id.uuidString, isDirectory: true)
-            .path
+        let certificateStoreDirectory: URL
+        do {
+            certificateStoreDirectory = try SessionCertificateStore.prepare(sessionID: id)
+        } catch {
+            return .failed(ConnectionFailure(
+                message: String(localized: "无法准备安全的证书检查目录。"),
+                nativeCode: 0
+            ), connectedBeforeFailure: false)
+        }
+        defer {
+            SessionCertificateStore.remove(certificateStoreDirectory)
+        }
+        let certificateStorePath = certificateStoreDirectory.path
         let endpointPort = endpoint.port
         let dynamicResolution = channelOptions.dynamicResolution
         let clipboardEnabled = channelOptions.clipboardEnabled

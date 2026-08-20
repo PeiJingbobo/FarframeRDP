@@ -1,3 +1,4 @@
+import Darwin
 import SwiftData
 import XCTest
 @testable import FarframeRDP
@@ -122,6 +123,47 @@ final class Phase7Tests: XCTestCase {
         XCTAssertEqual(records[0].accountSummary, "LAB\\developer")
         XCTAssertEqual(records[0].certificateTrustReference, "AA:BB:CC")
         XCTAssertEqual(records[0].lastSuccessfulConnection, now)
+    }
+
+    func testNewProfileIsPersistedBeforeAConnectionCanSucceed() throws {
+        let schema = Schema(versionedSchema: FarframeSchemaV1.self)
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let container = try ModelContainer(
+            for: schema,
+            migrationPlan: FarframeMigrationPlan.self,
+            configurations: configuration
+        )
+        let context = ModelContext(container)
+        let now = Date(timeIntervalSinceReferenceDate: 2_000)
+
+        let profile = try ConnectionProfilePersistence.create(
+            draft: ConnectionProfileDraft(
+                displayName: "  Pending PC  ",
+                host: "rdp.example",
+                username: "developer"
+            ),
+            in: context,
+            now: now
+        )
+
+        let records = try context.fetch(FetchDescriptor<ConnectionProfile>())
+        XCTAssertEqual(records.map(\.id), [profile.id])
+        XCTAssertEqual(records[0].displayName, "Pending PC")
+        XCTAssertNil(records[0].lastSuccessfulConnection)
+        XCTAssertNil(records[0].certificateTrustReference)
+    }
+
+    func testSessionCertificateStoreExistsWithPrivatePermissionsAndCanBeRemoved() throws {
+        let directory = try SessionCertificateStore.prepare(sessionID: UUID())
+        defer { SessionCertificateStore.remove(directory) }
+
+        var status = stat()
+        XCTAssertEqual(lstat(directory.path, &status), 0)
+        XCTAssertEqual(status.st_mode & S_IFMT, S_IFDIR)
+        XCTAssertEqual(status.st_mode & 0o777, 0o700)
+
+        SessionCertificateStore.remove(directory)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
     }
 
     func testProfileRoundTripKeepsIndependentDesktopAndRedirectionOptions() throws {

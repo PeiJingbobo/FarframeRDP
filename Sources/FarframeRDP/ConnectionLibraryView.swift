@@ -260,10 +260,8 @@ private struct ClipboardTransferSynchronizationModifier: ViewModifier {
 }
 
 private struct PendingConnection {
-    var profileID: UUID?
-    var draft: ConnectionProfileDraft?
+    var profileID: UUID
     var passwordToSave: String?
-    var certificateFingerprint: String?
 
     mutating func clearPassword() {
         passwordToSave = nil
@@ -329,11 +327,10 @@ struct ConnectionLibraryView: View {
             certificateTitle,
             isPresented: Binding(
                 get: { visibleCertificateChallenge != nil },
-                set: { presented in
-                    if !presented && sessionCoordinator.certificateChallenge != nil {
-                        sessionCoordinator.resolveCertificate(FFR_CERTIFICATE_REJECT)
-                    }
-                }
+                // Every visible exit is handled by an explicit alert button.
+                // A remembered fingerprint intentionally makes this binding false;
+                // treating that state update as rejection races automatic trust.
+                set: { _ in }
             ),
             presenting: visibleCertificateChallenge
         ) { _ in
@@ -574,9 +571,8 @@ struct ConnectionLibraryView: View {
             if let existing {
                 updateProfile(existing, draft: draft)
             } else {
-                beginConnection(
-                    endpointDraft: draft,
-                    profileID: nil,
+                createProfileAndConnect(
+                    draft: draft,
                     password: password,
                     savePassword: savePassword
                 )
@@ -793,7 +789,7 @@ struct ConnectionLibraryView: View {
 
     private func beginConnection(
         endpointDraft draft: ConnectionProfileDraft,
-        profileID: UUID?,
+        profileID: UUID,
         password: String,
         savePassword: Bool
     ) {
@@ -814,9 +810,7 @@ struct ConnectionLibraryView: View {
             remoteWindowManager.presentationRate = result.draft.desktopOptions.presentationRate
             pendingConnection = PendingConnection(
                 profileID: profileID,
-                draft: profileID == nil ? result.draft : nil,
-                passwordToSave: savePassword ? password : nil,
-                certificateFingerprint: nil
+                passwordToSave: savePassword ? password : nil
             )
             if result.draft.redirectOptions.clipboardEnabled {
                 clipboardController.onLocalContentChange = { content in
@@ -881,21 +875,7 @@ struct ConnectionLibraryView: View {
         guard var pending = pendingConnection else { return }
         pendingConnection = nil
         let now = Date()
-        let profile: ConnectionProfile
-
-        if let profileID = pending.profileID, let existing = findProfile(id: profileID) {
-            profile = existing
-        } else if let draft = pending.draft {
-            profile = ConnectionProfile(
-                draft: draft,
-                certificateTrustReference: pending.certificateFingerprint,
-                lastSuccessfulConnection: now,
-                now: now
-            )
-            modelContext.insert(profile)
-            activeProfileID = profile.id
-            selectedProfileID = profile.id
-        } else {
+        guard let profile = findProfile(id: pending.profileID) else {
             pending.clearPassword()
             return
         }
@@ -903,10 +883,6 @@ struct ConnectionLibraryView: View {
         profile.lastSuccessfulConnection = now
         profile.lastConnectionWarning = nil
         profile.modifiedAt = now
-        if let fingerprint = pending.certificateFingerprint {
-            profile.certificateTrustReference = fingerprint
-        }
-
         do {
             try modelContext.save()
             libraryController.markConnected(profileID: profile.id)
@@ -931,6 +907,29 @@ struct ConnectionLibraryView: View {
                     )
                 }
             }
+        }
+    }
+
+    private func createProfileAndConnect(
+        draft: ConnectionProfileDraft,
+        password: String,
+        savePassword: Bool
+    ) {
+        do {
+            let profile = try ConnectionProfilePersistence.create(
+                draft: draft,
+                in: modelContext
+            )
+            selectedProfileID = profile.id
+            beginConnection(
+                endpointDraft: ConnectionProfileDraft(profile: profile),
+                profileID: profile.id,
+                password: password,
+                savePassword: savePassword
+            )
+        } catch {
+            modelContext.rollback()
+            showNotice(title: "无法保存电脑", message: profileValidationMessage(error))
         }
     }
 
@@ -1067,8 +1066,6 @@ struct ConnectionLibraryView: View {
                     message: "本次仍可继续连接，但证书指纹没有保存。\n\n\(error.localizedDescription)"
                 )
             }
-        } else {
-            pendingConnection?.certificateFingerprint = challenge.fingerprint
         }
         sessionCoordinator.resolveCertificate(FFR_CERTIFICATE_ACCEPT_FOR_SESSION)
     }

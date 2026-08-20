@@ -4,7 +4,6 @@
 # Local project management and AI assistant metadata
 # TangoForge databases/configuration must remain local, including nested copies.
 .taskboard/
-docs/
 AGENTS.md
 .claude/
 .codex/
