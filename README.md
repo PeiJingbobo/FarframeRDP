@@ -94,6 +94,9 @@ runtime exception，并重新执行真实 Windows 主机验收后才能公证：
 /bin/sh scripts/package-release.sh v0.1.0
 ~~~
 
+发布脚本固定使用 Xcode 26.2（17C52）和 macOS SDK 26.2，这是当前通过真实 NLA 连接验收的
+工具链。GitHub Action 会显式选择该版本，不依赖 runner 随时间变化的默认 Xcode。
+
 推送 `vX.Y.Z` 标签会触发 GitHub Action；标签版本必须与 App 的 `MARKETING_VERSION` 完全一致，
 成功后会创建包含 DMG 与 SHA-256 校验文件的正式 GitHub Release。
 

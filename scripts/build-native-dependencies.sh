@@ -33,6 +33,15 @@ case "$architecture" in
         ;;
 esac
 
+xcode_output=$(xcodebuild -version)
+xcode_version=$(printf '%s\n' "$xcode_output" | sed -n '1s/^Xcode //p')
+xcode_build=$(printf '%s\n' "$xcode_output" | sed -n '2s/^Build version //p')
+macos_sdk_version=$(xcrun --sdk macosx --show-sdk-version)
+macos_sdk_path=$(xcrun --sdk macosx --show-sdk-path)
+clang_path=$(xcrun --find clang)
+clangxx_path=$(xcrun --find clang++)
+clang_version=$(xcrun clang --version | sed -n '1p')
+
 find_tool() {
     variable_name=$1
     command_name=$2
@@ -70,9 +79,13 @@ stamp_file="$artifact_root/build-manifest.txt"
 
 expected_manifest=$(cat <<EOF
 platform=$platform
-build_recipe=17
+build_recipe=19
 deployment_target=14.0
 system_processor=$system_processor
+xcode_version=$xcode_version
+xcode_build=$xcode_build
+macos_sdk_version=$macos_sdk_version
+clang_version=$clang_version
 with_simd=OFF
 openh264_use_asm=$openh264_use_asm
 channel_audin=ON
@@ -187,7 +200,7 @@ else
 fi
 
 openssl_stamp="$openssl_prefix/.farframe-build-commit"
-openssl_expected_stamp="$FARFRAME_OPENSSL_COMMIT $platform deployment-target-14.0"
+openssl_expected_stamp="$FARFRAME_OPENSSL_COMMIT $platform deployment-target-14.0 xcode-build-$xcode_build explicit-sdk-$macos_sdk_version"
 if [ ! -f "$openssl_stamp" ] || [ "$(cat "$openssl_stamp")" != "$openssl_expected_stamp" ]; then
     openssl_build="$build_root/openssl"
     rm -rf "$openssl_build" "$openssl_prefix"
@@ -196,7 +209,9 @@ if [ ! -f "$openssl_stamp" ] || [ "$(cat "$openssl_stamp")" != "$openssl_expecte
     (
         cd "$openssl_build"
         export MACOSX_DEPLOYMENT_TARGET=14.0
-        export CFLAGS="-mmacosx-version-min=14.0"
+        export SDKROOT="$macos_sdk_path"
+        export CC="$clang_path"
+        export CFLAGS="-isysroot $macos_sdk_path -mmacosx-version-min=14.0"
         "$openssl_source/Configure" \
             "$openssl_target" \
             no-shared \
@@ -211,7 +226,7 @@ if [ ! -f "$openssl_stamp" ] || [ "$(cat "$openssl_stamp")" != "$openssl_expecte
 fi
 
 openh264_stamp="$openh264_prefix/.farframe-build-commit"
-openh264_expected_stamp="$FARFRAME_OPENH264_COMMIT $platform deployment-target-14.0 use-asm-$openh264_use_asm isolated-source explicit-compiler-arch"
+openh264_expected_stamp="$FARFRAME_OPENH264_COMMIT $platform deployment-target-14.0 use-asm-$openh264_use_asm isolated-source explicit-compiler-arch xcode-build-$xcode_build explicit-sdk-$macos_sdk_version"
 if [ ! -f "$openh264_stamp" ] ||
    [ "$(cat "$openh264_stamp")" != "$openh264_expected_stamp" ]; then
     openh264_build="$build_root/openh264"
@@ -223,9 +238,9 @@ if [ ! -f "$openh264_stamp" ] ||
     MACOSX_DEPLOYMENT_TARGET=14.0 "$make_bin" \
         -C "$openh264_build_source" \
         -j"$(sysctl -n hw.logicalcpu)" \
-        CC="clang -arch $architecture" \
-        CXX="clang++ -arch $architecture" \
-        CCAS="clang -arch $architecture" \
+        CC="$clang_path -isysroot $macos_sdk_path -arch $architecture" \
+        CXX="$clangxx_path -isysroot $macos_sdk_path -arch $architecture" \
+        CCAS="$clang_path -isysroot $macos_sdk_path -arch $architecture" \
         ARCH="$architecture" \
         USE_ASM="$openh264_use_asm" \
         BUILDTYPE=Release \
@@ -244,8 +259,10 @@ MACOSX_DEPLOYMENT_TARGET=14.0 "$cmake_bin" \
     -DCMAKE_MAKE_PROGRAM="$build_tool_bin" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$freerdp_prefix" \
+    -DCMAKE_C_COMPILER="$clang_path" \
     -DCMAKE_OSX_ARCHITECTURES="$architecture" \
     -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+    -DCMAKE_OSX_SYSROOT="$macos_sdk_path" \
     -DCMAKE_SYSTEM_PROCESSOR="$system_processor" \
     -DCMAKE_PREFIX_PATH="$openssl_prefix;$openh264_prefix" \
     -DOPENSSL_ROOT_DIR="$openssl_prefix" \

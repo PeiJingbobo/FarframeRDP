@@ -5,6 +5,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 project_root=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
 release_tag=${1:-${FARFRAME_RELEASE_TAG:-}}
 
+/bin/sh "$script_dir/check-release-toolchain.sh"
 /bin/sh "$script_dir/validate-release-version.sh" "$release_tag"
 version=${release_tag#v}
 

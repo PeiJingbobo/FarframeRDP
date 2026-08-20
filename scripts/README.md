@@ -17,6 +17,8 @@
 - **build-universal-native-dependencies.sh**：构建两套单架构依赖并合并为 Universal 2 静态库。
 - **validate-release-version.sh**：校验 `vX.Y.Z` 发布标签与 App Release `MARKETING_VERSION` 完全一致。
 - **package-release.sh**：生成 ad-hoc 签名、未公证的 Universal 2 DMG 和 SHA-256 文件。
+- **check-release-toolchain.sh**：阻止本地或 CI 使用未经真实 NLA 验收的 Xcode/SDK 生成发布包。
+- **release-toolchain.sh**：记录发布所固定的 Xcode、build 与 macOS SDK 版本。
 - **test-native-bridge.sh**：使用 ASan/UBSan 运行独立 Bridge 所有权与线程 harness。
 - **test-rdp-integration.sh**：只从 Git 忽略的本地 JSON 读取端点、临时凭据和证书决定，编译并运行真实连接 harness。
 - **build.sh**：先确保原生依赖存在，再构建 FarframeRDP scheme；默认 Debug。
@@ -39,6 +41,10 @@
 Runtime 且不提交 Apple 公证；从网络下载后可能被 Gatekeeper 阻止，不能把该产物描述为 Developer
 ID 签名或已公证版本。当前设置来自本机 Release 二分验证：保留优化但关闭 Hardened Runtime 后，
 真实 NLA 连接恢复；取得 Developer ID 后必须恢复 Hardened Runtime 并重新验收。
+
+当前发布工具链固定为 Xcode 26.2（17C52）和 macOS SDK 26.2。GitHub hosted runner 会改变默认
+Xcode，因此 workflow 必须先显式设置 `DEVELOPER_DIR`；原生依赖 manifest 同时记录 Xcode、SDK
+与 Clang 指纹，防止跨工具链错误复用缓存。
 
 推送格式为 `vX.Y.Z` 的标签会触发 GitHub Action。Action 在任何编译前读取 Xcode Release
 构建设置；标签去掉 `v` 后与 `MARKETING_VERSION` 不一致时立即失败。成功后创建或更新正式

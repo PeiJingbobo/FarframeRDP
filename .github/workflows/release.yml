@@ -26,6 +26,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Select pinned Xcode
+        run: |
+          . scripts/release-toolchain.sh
+          developer_dir="/Applications/$FARFRAME_RELEASE_XCODE_APP_BASENAME/Contents/Developer"
+          test -d "$developer_dir"
+          echo "DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
+
       - name: Validate tag and app version
         env:
           FARFRAME_RELEASE_TAG: ${{ github.ref_name }}
@@ -33,7 +40,7 @@ jobs:
 
       - name: Check required build tools
         run: |
-          xcodebuild -version
+          /bin/sh scripts/check-release-toolchain.sh
           cmake --version
           if command -v ninja >/dev/null 2>&1; then
             ninja --version

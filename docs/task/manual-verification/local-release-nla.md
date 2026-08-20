@@ -18,6 +18,7 @@ Hardened Runtime 没有改变 TLS、NLA 或证书信任策略。
 - 签名：ad-hoc，未公证，无 Developer ID Application 证书。
 - Hardened Runtime：关闭。
 - App Sandbox：关闭。
+- 发布工具链：Xcode 26.2（17C52），macOS SDK 26.2。
 
 ## 操作与预期结果
 
@@ -55,11 +56,19 @@ Hardened Runtime 没有改变 TLS、NLA 或证书信任策略。
 - `v0.1.8` 本地 Universal DMG：已构建并完成结构校验。DMG 内 App 版本为 `0.1.8`，包含
   `x86_64` 与 `arm64`，严格签名校验及 SHA-256 校验通过；签名仅含 ad-hoc 标记，不含
   Hardened Runtime 标记，本地网络用途说明存在。
+- `v0.1.8` GitHub Release 回归：失败。远端 App 仍在 NLA 阶段返回 `0x2000D`。二进制审计确认
+  workflow 使用了 runner 的浮动默认 Xcode 26.6（17F113）和 macOS SDK 26.5，而本机通过验收的
+  App 使用 Xcode 26.2（17C52）和 macOS SDK 26.2；签名及 Hardened Runtime 标记没有差异。
+- 固定工具链候选：已使用 Xcode 26.2、SDK 26.2 和全量重建的双架构 OpenSSL/OpenH264/FreeRDP
+  生成本地 Universal App；131 项测试、Release 安全检查、严格签名及 DMG 校验通过。测试人员已
+  分别从候选 App 与 DMG 安装版本完成真实 NLA 连接，均可正常建立会话。
+- `v0.1.9` 本地发布候选：版本、Xcode build `17C52`、SDK `macosx26.2`、`x86_64`/`arm64`
+  架构、ad-hoc 签名和 SHA-256 均已校验通过；功能行为由上一项相同工具链候选的真实连接覆盖。
 
 ## 已知限制与后续门槛
 
 - 当前产物不是 Developer ID 签名且没有公证，Gatekeeper 体验不代表正式签名版本。
-- 尚未单独执行“从 DMG 拖入 Applications 后再次连接”的人工验证；本次真实会话验证使用的是
-  同一正式 Release 配置重建的 App，DMG 仅完成包内容与签名结构验证。
+- 固定 Xcode 26.2 后生成的新 CI 产物仍需重新执行真实 NLA 连接验证，工具链差异目前是已确认的
+  构建差异与首要嫌疑，尚不能在真实连接通过前宣称为最终根因。
 - Apple 公证要求 Developer ID 签名和 Hardened Runtime。取得证书后不得直接沿用当前设置；必须恢复
   Hardened Runtime，审计 FreeRDP/WinPR 所需的最小 runtime exception，并重新运行真实 NLA 验收。
