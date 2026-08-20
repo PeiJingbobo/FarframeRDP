@@ -52,6 +52,16 @@ case "$architectures" in
         ;;
 esac
 
+embedded_core="$app_path/Contents/Frameworks/FarframeCore.framework"
+if [ -e "$embedded_core" ]; then
+    echo "error: FarframeCore must be statically linked, not embedded: $embedded_core" >&2
+    exit 1
+fi
+if xcrun otool -L "$app_binary" | grep -Fq '@rpath/FarframeCore.framework'; then
+    echo "error: packaged app still dynamically loads FarframeCore" >&2
+    exit 1
+fi
+
 codesign --verify --deep --strict --verbose=2 "$app_path"
 /bin/sh "$script_dir/check-app-static-addins.sh" "$derived_data" Release
 

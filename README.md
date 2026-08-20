@@ -26,7 +26,7 @@ RD Gateway、多显示器、RemoteApp、麦克风重定向和有限自动重连�
 ## 工程结构
 
 - **FarframeRDP**：SwiftUI 应用外壳与 AppKit 远程窗口装配。
-- **FarframeCore**：稳定标识、错误类型、日志分类和诊断脱敏。
+- **FarframeCore**：稳定标识、错误类型、日志分类和诊断脱敏；以静态框架链接进主程序，避免未签名分发中的动态库签名边界。
 - **FarframeRDPBridge**：唯一拥有 FreeRDP instance/context 的窄 C ABI；Swift 只接触不透明句柄。
 - **FarframeCoreTests**、**FarframeRDPTests**、**FarframeRDPBridgeTests**：对应模块测试。
 

@@ -4,7 +4,7 @@
 
 - 任务标识：universal-release-packaging
 - 范围：Farframe RDP 0.1.x Universal 2、未公证 DMG 和 tag 触发 GitHub Action
-- 当前状态：0.1.3 本地与 GitHub Action 打包验证通过；Intel 实机和 GUI 安装验收待执行
+- 当前状态：0.1.4 静态链接修复已通过本地打包、自动化测试和 DMG 独立路径启动验证；GitHub Action 与 Intel 实机待执行
 
 ## 前置条件与安全测试数据
 
@@ -17,16 +17,18 @@
 
 | 步骤 | 操作 | 预期结果 | 状态 |
 | --- | --- | --- | --- |
-| 1 | 运行 `/bin/sh scripts/validate-release-version.sh v0.1.3` | 标签与 App `MARKETING_VERSION=0.1.3` 一致，校验通过 | 通过 |
+| 1 | 运行 `/bin/sh scripts/validate-release-version.sh v0.1.4` | 标签与 App `MARKETING_VERSION=0.1.4` 一致，校验通过 | 通过 |
 | 2 | 使用一个不匹配标签运行版本校验 | 在构建原生依赖前失败，不产生 DMG | 通过；使用 `v0.1.0` 验证 |
-| 3 | 运行 `/bin/sh scripts/package-release.sh v0.1.3` | 生成 DMG 和 SHA-256 文件，命令无警告性失败 | 通过 |
-| 4 | 对 App 主程序和 Universal 原生静态库运行 `lipo -archs` | 均同时包含 `arm64` 与 `x86_64` | 通过；App、FarframeCore 和原生聚合库均含两个架构 |
+| 3 | 运行 `/bin/sh scripts/package-release.sh v0.1.4` | 生成 DMG 和 SHA-256 文件，命令无警告性失败 | 通过 |
+| 4 | 对 App 主程序和 Universal 原生静态库运行 `lipo -archs` | 均同时包含 `arm64` 与 `x86_64` | 通过；App 和原生聚合库均含两个架构 |
 | 5 | 运行 `codesign --verify --deep --strict` 和 `hdiutil verify` | ad-hoc 签名和 DMG 结构有效 | 通过 |
 | 6 | 挂载 DMG，将 App 拖入 Applications 并启动 | App 能启动；系统可能因未公证显示 Gatekeeper 警告，该限制如实披露 | 待执行 |
 | 7 | 在 Apple Silicon Mac 上完成基本启动、创建非秘密测试 Profile、关闭和重新打开 | 没有架构加载错误或启动崩溃 | 待执行 |
 | 8 | 在可运行 macOS 14 的 Intel Mac 上重复步骤 6–7 | 没有架构加载错误或启动崩溃 | 待执行 |
 | 9 | 推送版本匹配的新标签 | Action 成功，并创建包含 DMG 与 SHA-256 的正式 Release | 通过；`v0.1.3` 的构建和资产已验证，发布状态随后改为正式 |
 | 10 | 推送版本不匹配的隔离测试标签 | Action 在版本校验阶段失败且不创建发布产物 | 待执行 |
+| 11 | 检查 App 的 `otool -L` 与 `Contents/Frameworks` | 不动态加载或嵌入 `FarframeCore.framework` | 通过；两个架构均只加载系统库/框架 |
+| 12 | 从 DMG 安装后在干净路径启动 App | App 保持运行且不产生 dyld Library Validation 崩溃 | 通过；Apple Silicon 上持续运行 8 秒后主动结束 |
 
 ## 证据记录
 
@@ -56,6 +58,12 @@
 - 正式 Release：`Farframe RDP 0.1.3`，状态 `draft=false`、`prerelease=false`；资产 `FarframeRDP-0.1.3-universal.dmg`（13,453,511 字节）和 `FarframeRDP-0.1.3-universal.dmg.sha256`（98 字节）均为 uploaded。
 - 从 Release 重新下载两个资产后，SHA-256 与 `hdiutil verify` 独立校验通过。
 - 2026-08-20 已将发布策略改为正式 Release：现有 Draft 会在覆盖上传后执行 `--draft=false`，新 Release 创建时也显式设置 `--draft=false`。
+- 0.1.3 启动崩溃根因：主 App 与动态 `FarframeCore.framework` 都使用 ad-hoc Hardened Runtime 签名；无 Developer ID Team ID 时，dyld Library Validation 拒绝加载框架。
+- 0.1.4 修复策略：将 `FarframeCore` 构建为静态框架并链接进主程序，不嵌入动态框架；保留 Hardened Runtime，且不启用 `disable-library-validation` 权限。
+- `/bin/sh scripts/package-release.sh v0.1.4`：通过；生成 Universal DMG，严格 codesign 和 `hdiutil verify` 通过。
+- `/bin/sh scripts/test.sh`：通过，共 128 项，0 失败、0 跳过（Core 14、App 105、Bridge 9）。
+- `scripts/check-release-security.sh`：通过；主程序签名仍含 Hardened Runtime `runtime` flag，未增加签名例外权限。
+- 从 0.1.4 DMG 挂载并复制到独立临时路径后直接启动：进程持续存活 8 秒，无 dyld Library Validation 崩溃；`Contents/Frameworks/FarframeCore.framework` 不存在，`otool -L` 不含 `@rpath/FarframeCore.framework`。
 
 ## 清理与恢复
 

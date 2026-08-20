@@ -13,7 +13,6 @@
 		100000000000000000000004 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 220000000000000000000001 /* XCTest.framework */; };
 		100000000000000000000005 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 220000000000000000000001 /* XCTest.framework */; };
 		100000000000000000000006 /* libFarframeRDPBridge.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 210000000000000000000003 /* libFarframeRDPBridge.a */; };
-		100000000000000000000007 /* FarframeCore.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 210000000000000000000002 /* FarframeCore.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		100000000000000000000008 /* libFarframeRDPBridge.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 210000000000000000000003 /* libFarframeRDPBridge.a */; };
 		100000000000000000000009 /* third-party/artifacts/macos-universal/lib/libFarframeRDPDependencies.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 230000000000000000000001 /* third-party/artifacts/macos-universal/lib/libFarframeRDPDependencies.a */; };
 		100000000000000000000010 /* third-party/artifacts/macos-universal/lib/libFarframeRDPDependencies.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 230000000000000000000001 /* third-party/artifacts/macos-universal/lib/libFarframeRDPDependencies.a */; };
@@ -56,20 +55,6 @@
 			remoteInfo = FarframeRDPBridge;
 		};
 /* End PBXContainerItemProxy section */
-
-/* Begin PBXCopyFilesBuildPhase section */
-		440000000000000000000001 /* Embed Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-				100000000000000000000007 /* FarframeCore.framework in Embed Frameworks */,
-			);
-			name = "Embed Frameworks";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		200000000000000000000041 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
@@ -207,7 +192,6 @@
 			buildPhases = (
 				400000000000000000000001 /* Sources */,
 				410000000000000000000001 /* Frameworks */,
-				440000000000000000000001 /* Embed Frameworks */,
 				430000000000000000000001 /* Resources */,
 			);
 			buildRules = (
@@ -652,6 +636,7 @@
 				DEFINES_MODULE = YES;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
 				GENERATE_INFOPLIST_FILE = YES;
+				MACH_O_TYPE = staticlib;
 				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.core;
 				PRODUCT_NAME = FarframeCore;
 				SKIP_INSTALL = YES;
@@ -665,6 +650,7 @@
 				DEFINES_MODULE = YES;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
 				GENERATE_INFOPLIST_FILE = YES;
+				MACH_O_TYPE = staticlib;
 				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.core;
 				PRODUCT_NAME = FarframeCore;
 				SKIP_INSTALL = YES;
@@ -678,6 +664,7 @@
 				DEFINES_MODULE = YES;
 				DYLIB_INSTALL_NAME_BASE = "@rpath";
 				GENERATE_INFOPLIST_FILE = YES;
+				MACH_O_TYPE = staticlib;
 				PRODUCT_BUNDLE_IDENTIFIER = com.farframe.rdp.core;
 				PRODUCT_NAME = FarframeCore;
 				SKIP_INSTALL = YES;
