@@ -77,6 +77,11 @@ Hardened Runtime 没有改变 TLS、NLA 或证书信任策略。
   `OPENSSL_MODULES` 指向不存在目录时通过已知 NTLM hash 与 RC4 向量；131 项 Debug Xcode 测试、
   Release 安全设置检查、Universal Release 构建、严格签名、运行时依赖检查与 DMG 校验均通过。
   本地候选 DMG 的真实 NLA 连接已由测试人员执行，确认可以正常运行并建立连接。
+- `v0.1.10` GitHub Action：已成功完成并创建非 Draft、非 prerelease 的正式 Release。下载后的远端
+  DMG 已通过发布校验和、版本 `0.1.10`、Xcode build `17C52`、Universal `x86_64`/`arm64`、严格
+  签名与运行时自包含检查；SHA-256 为
+  `f9a4bc4dc83fefcb6cbd1f6a3a1b37478b78e70ef5e6465186be841387d3887e`。该 CI DMG 的真实 NLA
+  连接仍待测试人员执行。
 
 ## 已知限制与后续门槛
 
