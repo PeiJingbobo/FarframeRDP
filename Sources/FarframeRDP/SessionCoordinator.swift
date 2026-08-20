@@ -333,7 +333,7 @@ private func localizedConnectionFailure(_ failure: FFRConnectionFailure) -> Stri
     case FFR_CONNECTION_FAILURE_CERTIFICATE_CHANGED:
         String(localized: "远程证书已更改。")
     case FFR_CONNECTION_FAILURE_AUTHENTICATION:
-        String(localized: "身份认证失败。")
+        String(localized: "身份认证失败。请检查 Windows 用户名、域和密码。用户名也可以使用 DOMAIN\\user 或 user@domain 格式。")
     case FFR_CONNECTION_FAILURE_SERVER_REFUSED:
         String(localized: "服务器拒绝了连接。")
     case FFR_CONNECTION_FAILURE_PROTOCOL:

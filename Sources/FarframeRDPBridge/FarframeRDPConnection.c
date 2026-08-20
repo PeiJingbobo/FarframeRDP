@@ -195,6 +195,39 @@ FFRConnectionFailure FFRMapConnectionFailure(uint32_t error)
     }
 }
 
+FFRConnectionFailure FFRMapConnectionFailureForState(uint32_t error,
+                                                      CONNECTION_STATE state)
+{
+    /* FreeRDP can report rejected CredSSP credentials as a transport error. */
+    if (error == FREERDP_ERROR_CONNECT_TRANSPORT_FAILED &&
+        state == CONNECTION_STATE_NLA) {
+        return FFR_CONNECTION_FAILURE_AUTHENTICATION;
+    }
+    return FFRMapConnectionFailure(error);
+}
+
+static bool FFRSetIdentity(rdpSettings *settings,
+                           FreeRDP_Settings_Keys_String usernameKey,
+                           FreeRDP_Settings_Keys_String domainKey,
+                           const char *username,
+                           const char *domain)
+{
+    if (domain[0] != '\0' || strchr(username, '\\') == NULL) {
+        return freerdp_settings_set_string(settings, usernameKey, username) &&
+               freerdp_settings_set_string(settings, domainKey, domain);
+    }
+
+    char *parsedUsername = NULL;
+    char *parsedDomain = NULL;
+    const BOOL parsed = freerdp_parse_username(username, &parsedUsername, &parsedDomain);
+    const bool updated = parsed && parsedUsername != NULL && parsedDomain != NULL &&
+        freerdp_settings_set_string(settings, usernameKey, parsedUsername) &&
+        freerdp_settings_set_string(settings, domainKey, parsedDomain);
+    free(parsedUsername);
+    free(parsedDomain);
+    return updated;
+}
+
 static DWORD FFRWaitForCertificateDecision(FFRSession *session,
                                            const FFRCertificateInfo *certificate)
 {
@@ -1079,8 +1112,8 @@ FFRResult FFRSessionConfigure(FFRSession *session,
     const BOOL updated =
         freerdp_settings_set_string(target, FreeRDP_ServerHostname, settings->hostname) &&
         freerdp_settings_set_uint32(target, FreeRDP_ServerPort, settings->port) &&
-        freerdp_settings_set_string(target, FreeRDP_Username, settings->username) &&
-        freerdp_settings_set_string(target, FreeRDP_Domain, settings->domain) &&
+        FFRSetIdentity(target, FreeRDP_Username, FreeRDP_Domain,
+                       settings->username, settings->domain) &&
         freerdp_settings_set_string(target, FreeRDP_Password, settings->password) &&
         freerdp_settings_set_string(target, FreeRDP_ConfigPath,
                                     settings->certificateStorePath) &&
@@ -1167,10 +1200,8 @@ FFRResult FFRSessionConfigure(FFRSession *session,
         }
         if (!settings->gatewayUseSameCredentials) {
             const BOOL gatewayCredentialsUpdated =
-                freerdp_settings_set_string(target, FreeRDP_GatewayUsername,
-                                            settings->gatewayUsername) &&
-                freerdp_settings_set_string(target, FreeRDP_GatewayDomain,
-                                            settings->gatewayDomain) &&
+                FFRSetIdentity(target, FreeRDP_GatewayUsername, FreeRDP_GatewayDomain,
+                               settings->gatewayUsername, settings->gatewayDomain) &&
                 freerdp_settings_set_string(target, FreeRDP_GatewayPassword,
                                             settings->gatewayPassword);
             if (!gatewayCredentialsUpdated) {
@@ -1280,10 +1311,13 @@ FFRResult FFRSessionConnect(FFRSession *session)
 
     if (!freerdp_connect(session->instance)) {
         const uint32_t nativeError = freerdp_get_last_error(session->instance->context);
+        const CONNECTION_STATE connectionState =
+            freerdp_get_state(session->instance->context);
         const bool cancelled =
             atomic_load_explicit(&session->cancellationRequested, memory_order_acquire) ||
             nativeError == FREERDP_ERROR_CONNECT_CANCELLED;
-        FFRConnectionFailure failure = FFRMapConnectionFailure(nativeError);
+        FFRConnectionFailure failure =
+            FFRMapConnectionFailureForState(nativeError, connectionState);
         if (session->certificateRejected) {
             failure = session->certificateWasChanged
                 ? FFR_CONNECTION_FAILURE_CERTIFICATE_CHANGED

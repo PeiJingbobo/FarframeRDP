@@ -180,6 +180,8 @@ struct FFRSession {
 bool FFRSessionIsOwnedByCurrentThread(const FFRSession *session);
 FFRSession *FFRSessionFromInstance(freerdp *instance);
 FFRConnectionFailure FFRMapConnectionFailure(uint32_t error);
+FFRConnectionFailure FFRMapConnectionFailureForState(uint32_t error,
+                                                      CONNECTION_STATE state);
 void FFREmitEvent(FFRSession *session,
                   FFREventType type,
                   FFRResult result,

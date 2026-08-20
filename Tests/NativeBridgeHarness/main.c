@@ -164,6 +164,12 @@ int main(void)
            FFR_CONNECTION_FAILURE_SECURITY_NEGOTIATION);
     assert(FFRMapConnectionFailure(FREERDP_ERROR_AUTHENTICATION_FAILED) ==
            FFR_CONNECTION_FAILURE_AUTHENTICATION);
+    assert(FFRMapConnectionFailureForState(FREERDP_ERROR_CONNECT_TRANSPORT_FAILED,
+                                           CONNECTION_STATE_NLA) ==
+           FFR_CONNECTION_FAILURE_AUTHENTICATION);
+    assert(FFRMapConnectionFailureForState(FREERDP_ERROR_CONNECT_TRANSPORT_FAILED,
+                                           CONNECTION_STATE_NEGO) ==
+           FFR_CONNECTION_FAILURE_NETWORK);
     assert(FFRMapConnectionFailure(FREERDP_ERROR_CONNECT_LOGON_TYPE_NOT_GRANTED) ==
            FFR_CONNECTION_FAILURE_SERVER_REFUSED);
     assert(FFRMapConnectionFailure(UINT32_MAX) == FFR_CONNECTION_FAILURE_PROTOCOL);
@@ -336,7 +342,7 @@ int main(void)
         const FFRConnectionSettings settings = {
             .hostname = "example.invalid",
             .port = 3389,
-            .username = "test-user",
+            .username = "EXAMPLE\\test-user",
             .domain = "",
             .password = "",
             .certificateStorePath = "/tmp/farframe-rdp-native-tests",
@@ -358,6 +364,12 @@ int main(void)
             .remoteAppWorkingDirectory = "",
         };
         assert(FFRSessionConfigure(session, &settings) == FFR_RESULT_OK);
+        assert(strcmp(freerdp_settings_get_string(session->instance->context->settings,
+                                                  FreeRDP_Username),
+                      "test-user") == 0);
+        assert(strcmp(freerdp_settings_get_string(session->instance->context->settings,
+                                                  FreeRDP_Domain),
+                      "EXAMPLE") == 0);
         assert(session->instance->LoadChannels != NULL);
         assert(session->instance->LoadChannels(session->instance));
         StaticClientChannelStats *channelStats = freerdp_channels_client_stats(
