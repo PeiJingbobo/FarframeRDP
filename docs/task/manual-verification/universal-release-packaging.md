@@ -11,7 +11,7 @@
 1. 一台运行受支持 macOS、安装完整 Xcode、CMake 和 Ninja 的测试 Mac。
 2. 一个不含真实 RDP 端点、账号、凭据、证书或签名身份的干净源码检出。
 3. 本流程不需要 Apple Developer 账号或 Developer ID 证书。
-4. 验证 GitHub Action 时使用版本匹配的测试标签；不要在验证通过前公开 draft Release。
+4. 验证 GitHub Action 时使用版本匹配的测试标签；成功后会直接公开正式 Release。
 
 ## 操作和预期结果
 
@@ -25,13 +25,13 @@
 | 6 | 挂载 DMG，将 App 拖入 Applications 并启动 | App 能启动；系统可能因未公证显示 Gatekeeper 警告，该限制如实披露 | 待执行 |
 | 7 | 在 Apple Silicon Mac 上完成基本启动、创建非秘密测试 Profile、关闭和重新打开 | 没有架构加载错误或启动崩溃 | 待执行 |
 | 8 | 在可运行 macOS 14 的 Intel Mac 上重复步骤 6–7 | 没有架构加载错误或启动崩溃 | 待执行 |
-| 9 | 推送版本匹配的新标签 | Action 成功，并创建包含 DMG 与 SHA-256 的 draft Release | 通过；`v0.1.3` |
+| 9 | 推送版本匹配的新标签 | Action 成功，并创建包含 DMG 与 SHA-256 的正式 Release | 通过；`v0.1.3` 的构建和资产已验证，发布状态随后改为正式 |
 | 10 | 推送版本不匹配的隔离测试标签 | Action 在版本校验阶段失败且不创建发布产物 | 待执行 |
 
 ## 证据记录
 
 - 记录 commit 和标签，不记录账号、签名身份或机器特定路径。
-- 保存 `lipo` 架构摘要、测试命令结果、Action URL 和 draft Release 资产名称。
+- 保存 `lipo` 架构摘要、测试命令结果、Action URL 和正式 Release 资产名称。
 - 分别标记 Apple Silicon、Intel、GitHub Action 步骤为通过、失败或未执行。
 
 ## 本次执行记录
@@ -52,15 +52,16 @@
 - GitHub `v0.1.2` Action 已通过 Xcode 26 源码编译，在 x86_64 最终链接失败：runner 预装的 `json-c` 被 FreeRDP 自动探测并引用，但未进入项目聚合静态库；失败运行：`32324960145`。
 - 原生依赖修复：显式设置 `WITH_JSON_DISABLED=ON`。当前集成不使用该可选能力，禁用环境相关的自动探测可保证本地和 CI 产物配置一致；不改写 `v0.1.2`，使用 `v0.1.3` 验证。
 - `/bin/sh scripts/package-release.sh v0.1.3`：通过；双架构依赖按禁用 JSON 自动探测的新配方完整重建，Release App 链接、签名与 DMG 校验通过。
-- GitHub `v0.1.3` Action：通过；运行 `32325778526`，耗时 7 分 4 秒，标签与应用版本校验、Universal DMG 打包及 draft Release 上传均成功。
-- Draft Release：`Farframe RDP 0.1.3`；资产 `FarframeRDP-0.1.3-universal.dmg`（13,562,415 字节）和 `FarframeRDP-0.1.3-universal.dmg.sha256`（98 字节）均为 uploaded。
-- 从 draft Release 重新下载两个资产后，SHA-256 与 `hdiutil verify` 独立校验通过。
+- GitHub `v0.1.3` Action：通过；运行 `32325778526`，耗时 7 分 4 秒，标签与应用版本校验、Universal DMG 打包及 Release 资产上传均成功。
+- 正式 Release：`Farframe RDP 0.1.3`，状态 `draft=false`、`prerelease=false`；资产 `FarframeRDP-0.1.3-universal.dmg`（13,453,511 字节）和 `FarframeRDP-0.1.3-universal.dmg.sha256`（98 字节）均为 uploaded。
+- 从 Release 重新下载两个资产后，SHA-256 与 `hdiutil verify` 独立校验通过。
+- 2026-08-20 已将发布策略改为正式 Release：现有 Draft 会在覆盖上传后执行 `--draft=false`，新 Release 创建时也显式设置 `--draft=false`。
 
 ## 清理与恢复
 
 1. 卸载测试 DMG，删除测试安装的 App 和测试 Profile。
 2. 删除 `.release/`、任务专用 `.derivedData-*` 和已忽略的原生构建产物。
-3. 删除只用于失败路径验证的隔离标签和对应 draft Release；不得改写正式发布标签历史。
+3. 删除只用于失败路径验证的隔离标签和对应测试 Release；不得改写正式发布标签历史。
 
 ## 已知限制
 

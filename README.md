@@ -92,7 +92,7 @@ FARFRAME_DERIVED_DATA_PATH 指定其他 Derived Data 目录。
 ~~~
 
 推送 `vX.Y.Z` 标签会触发 GitHub Action；标签版本必须与 App 的 `MARKETING_VERSION` 完全一致，
-成功产物进入 draft GitHub Release。
+成功后会创建包含 DMG 与 SHA-256 校验文件的正式 GitHub Release。
 
 Xcode Sanitizer 应用构建仍受 Phase 1 记录的 XCTest 引导限制；Phase 2 已增加独立原生
 ASan/UBSan harness 并验证 Bridge 所有权。详情见
