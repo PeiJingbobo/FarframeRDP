@@ -3,9 +3,10 @@
 Farframe RDP 是一个原生 macOS RDP 客户端，核心目标是可靠的标准 RDP 兼容性、安全的一键凭据，
 以及远程画布聚焦时可控的 macOS 快捷键处理。
 
-当前已完成至 Phase 7 的代码和自动化验证：项目包含固定版本 FreeRDP/WinPR、窄 C Bridge、
-Metal 画面、基础输入、应用内快捷键、SwiftData Profile、异步 Keychain 和一键连接界面。
-Phase 7 的真实 Windows、Keychain 系统交互和 GUI 人工验收仍按验证记录执行。
+当前已完成 Phase 0–9 的主要实现与阶段验收：项目包含固定版本 FreeRDP/WinPR、窄 C Bridge、
+Metal 画面、键鼠输入与快捷键策略、SwiftData Profile、异步 Keychain、基础 RDP 通道，以及
+RD Gateway、多显示器、RemoteApp、麦克风重定向和有限自动重连。这里的“已实现”仅指 Farframe
+已经完成集成的路径；具体测试覆盖、人工证据和限制仍以兼容性矩阵及任务验证记录为准。
 
 ## 项目根目录
 
@@ -18,7 +19,7 @@ Phase 7 的真实 Windows、Keychain 系统交互和 GUI 人工验收仍按验�
 - 主行动计划：[`docs/task/00-master-action-plan.md`](docs/task/00-master-action-plan.md)
 - 可执行任务清单：[`docs/task/01-executable-backlog.md`](docs/task/01-executable-backlog.md)
 - 架构决策记录：[`docs/adr/README.md`](docs/adr/README.md)
-- Phase 7 验证记录：[`docs/task/phase-7-validation.md`](docs/task/phase-7-validation.md)
+- 阶段人工验收手册：[`docs/task/manual-verification/`](docs/task/manual-verification/)
 - 兼容性矩阵：[`docs/compatibility/README.md`](docs/compatibility/README.md)
 - 第三方组件与许可证：[`third-party/README.md`](third-party/README.md)
 
@@ -28,6 +29,42 @@ Phase 7 的真实 Windows、Keychain 系统交互和 GUI 人工验收仍按验�
 - **FarframeCore**：稳定标识、错误类型、日志分类和诊断脱敏。
 - **FarframeRDPBridge**：唯一拥有 FreeRDP instance/context 的窄 C ABI；Swift 只接触不透明句柄。
 - **FarframeCoreTests**、**FarframeRDPTests**、**FarframeRDPBridgeTests**：对应模块测试。
+
+## RDP 实现进度
+
+状态含义：**已支持**表示已有实现和对应验收证据；**部分支持**表示主路径可用，但仍有明确的
+协议、对象模型或设备范围缺口；**实验性**表示已接入构建或协商路径，但真实环境覆盖仍不足；
+**未实现**表示当前构建未启用或 Farframe 尚未完成集成。FreeRDP 上游具备某项能力不等于
+Farframe 已经支持该能力。
+
+| 能力 | 当前状态 | 已实现范围 | 仍缺失或限制 |
+|---|---|---|---|
+| 连接、安全与生命周期 | 已支持 | IPv4/DNS/自定义端口、TLS/NLA、证书显式决策、会话 UUID 隔离、取消与完整清理 | Windows/Server/域、IPv6、高延迟和丢包仍需扩大兼容矩阵 |
+| 普通桌面图形 | 部分支持 | BGRA 更新、Metal/CAMetalLayer、脏区、缩放、光标；普通桌面可协商 RDPGFX Progressive 和 AVC420/AVC444 | RDPGFX/AVC 仍属实验性，真实高动态画面、性能与更多服务端组合待验证 |
+| 键盘、鼠标与快捷键 | 部分支持 | scan code 键盘、鼠标/滚轮、锁定键、远端输入法策略、焦点/断线释放、应用内快捷键策略 | 非美式物理键盘、扩展鼠标键和增强 CGEventTap 捕获仍需完整人工验收 |
+| Profile、凭据与信任 | 已支持 | SwiftData 非秘密配置、Keychain 密码、目标/网关证书信任、一键连接与删除清理 | 仍需持续覆盖 Keychain/TCC 异常和证书轮换场景 |
+| 剪贴板 | 部分支持 | 双向文本；HTML/RTF、PNG/DIB、普通文件对象和按需文件流已实现并有自动化测试 | HTML/图片/文件互操作仍待统一人工收口；文件对象目前不支持目录、Package、符号链接、alias 或路径文本 |
+| 音频播放 | 已支持 | `rdpsnd`/Core Audio、会话开关、跟随系统输出切换和断线释放 | Profile 尚不能指定首选本机输出设备，也没有“设备不存在时降级到系统默认”的会话级策略 |
+| 动态分辨率与多显示器 | 已支持 | `disp` 通道、窗口 resize、当前窗口/全部显示器、布局、DPI 与主屏映射 | 仍需扩大不同 macOS、Retina/非 Retina 组合覆盖 |
+| 本地目录重定向 | 已支持 | 每个 Profile 可显式授权一个本地目录；路径规范化和越界检查已接入 | 暂不支持多个独立映射目录；真实部署仍需遵守最小授权原则 |
+| RD Gateway | 已支持 | 独立网关配置、凭据、证书信任，以及网关/目标连接和认证错误分层 | 更多网关产品、代理和企业策略组合待兼容验证 |
+| RemoteApp | 部分支持 | RAIL 启动、参数/工作目录、错误恢复、窗口和会话生命周期已验收 | RemoteApp 当前未接入 RDPGFX Progressive/AVC 图形路径，仍使用兼容回退路径 |
+| 麦克风重定向 | 已支持 | `audin`、TCC 权限、设备选择、不可用设备降级及断线清理 | 更多输入设备与服务端应用组合待验证 |
+| 自动重连 | 部分支持 | 网络类失败后有限、可取消、有状态提示地重建 FreeRDP 会话；认证/证书错误不循环重试 | 尚未实现 RDP Auto-Reconnect Cookie 驱动的协议级会话续接 |
+| 设备重定向 | 未实现 | 当前版本有意保持打印机、智能卡、USB、串口、并口和摄像头关闭 | URBDRC、serial、parallel、RDPECAM 尚未集成；触控/笔输入的 RDPEI 路径也未实现 |
+
+### 下一阶段协议任务
+
+| TangoForge 任务 | 工作内容 | 关键完成标准 |
+|---|---|---|
+| T088 | RDP 协议级自动重连与会话续接 | 优先续接原会话，失败后安全降级到现有有限重建策略；cookie 不持久化、不记录日志 |
+| T090 | RemoteApp 的 RDPGFX Progressive/AVC 图形路径 | RAIL 窗口与 surface 生命周期正确；协商失败可回退且不影响输入响应 |
+| T086、T091–T094 | USB、串并口、摄像头、触控/笔设备重定向 | 默认关闭、Profile 显式授权、权限最小化、热插拔和单项失败隔离 |
+| T087、T095–T097 | 文件剪贴板完整对象模型 | 为目录、Package、链接/alias 和路径文本定义支持/转换/拒绝策略，并实现有界流式传输 |
+| T089 | Profile 首选远端音频播放设备 | 保存稳定设备标识；设备缺失或打开失败时降级到系统默认且不覆盖用户选择 |
+
+详细测试状态和限制见[兼容性矩阵](docs/compatibility/matrix.md)，阶段人工验收记录见
+[`docs/task/manual-verification/`](docs/task/manual-verification/)。
 
 ## Mac 构建与测试
 
@@ -62,10 +99,12 @@ ASan/UBSan harness 并验证 Bridge 所有权。详情见
 ## 当前工作顺序
 
 ```text
-Phase 0–6 已完成的基础能力
-→ Phase 7 Profile 与一键连接（已完成）
-→ Phase 8 基础 RDP 通道
-→ Phase 9 高级兼容性
+Phase 0–9 主要能力（已完成阶段实现与验收）
+→ 协议级会话续接与 RemoteApp 高级图形路径
+→ 文件剪贴板完整对象模型
+→ Profile 音频输出设备选择
+→ 按需求和平台可行性逐项启用设备重定向
+→ 扩大安全、稳定性、性能与兼容性矩阵
 ```
 
 具体依赖和验收条件见任务清单。任务完成时必须记录实际执行的命令、通过的测试、未运行项、
